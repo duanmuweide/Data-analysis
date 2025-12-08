@@ -4,28 +4,42 @@ import java.sql.*;
 import java.util.Properties;
 
 public class PhosphorusPollutionByBasinArea {
-  // 替换为实际Hive集群配置
+  // Hive连接配置（保持原配置）
   private static final String HIVE_URL = "jdbc:hive2://master-pc:10000/data_analysis";
   private static final String HIVE_USER = "master";
   private static final String HIVE_PASSWORD = "";
 
+  // MySQL连接配置（适配你的环境：数据库名american_data_analysis，密码为空）
+  private static final String MYSQL_URL = "jdbc:mysql://localhost:3306/american_data_analysis?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+  private static final String MYSQL_USER = "root";
+  private static final String MYSQL_PASSWORD = "Czm982376"; // 密码为空
+  // MySQL目标表名（需提前创建，表结构见下方）
+  private static final String MYSQL_TARGET_TABLE = "phosphorus_pollution_by_basin_area";
+
   public static void main(String[] args) {
-    Connection conn = null;
-    Statement stmt = null;
+    Connection hiveConn = null;
+    Connection mysqlConn = null;
+    Statement hiveStmt = null;
+    PreparedStatement mysqlPstmt = null;
     ResultSet rs = null;
 
     try {
-      // 1. 加载Hive JDBC驱动
+      // 1. 加载驱动
       Class.forName("org.apache.hive.jdbc.HiveDriver");
+      Class.forName("com.mysql.cj.jdbc.Driver");
 
-      // 2. 创建Hive连接
-      Properties props = new Properties();
-      props.setProperty("user", HIVE_USER);
-      props.setProperty("password", HIVE_PASSWORD);
-      conn = DriverManager.getConnection(HIVE_URL, props);
+      // 2. 建立Hive连接
+      Properties hiveProps = new Properties();
+      hiveProps.setProperty("user", HIVE_USER);
+      hiveProps.setProperty("password", HIVE_PASSWORD);
+      hiveConn = DriverManager.getConnection(HIVE_URL, hiveProps);
 
-      // 3. 构建统计SQL（完整保留原查询逻辑）
-      String sql = "SELECT " +
+      // 3. 建立MySQL连接（密码为空）
+      mysqlConn = DriverManager.getConnection(MYSQL_URL, MYSQL_USER, MYSQL_PASSWORD);
+      mysqlConn.setAutoCommit(false); // 关闭自动提交，开启批量插入
+
+      // 4. 构建Hive查询SQL（保留原逻辑）
+      String hiveSql = "SELECT " +
               "    CASE " +
               "        WHEN area_sqkm < 1000 THEN '小型流域(<1000km²)' " +
               "        WHEN area_sqkm BETWEEN 1000 AND 5000 THEN '中型流域(1000-5000km²)' " +
@@ -52,13 +66,20 @@ public class PhosphorusPollutionByBasinArea {
               "    END " +
               "ORDER BY basin_count DESC";
 
-      // 4. 执行查询
-      stmt = conn.createStatement();
-      rs = stmt.executeQuery(sql);
+      // 5. 预编译MySQL插入语句（字段名无关键字冲突，无需反引号）
+      String mysqlInsertSql = String.format(
+              "INSERT INTO %s (area_grade, basin_count, farm_fert_total, manure_total, " +
+                      "point_source_total, farm_fert_ratio, manure_ratio, point_source_ratio) " +
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", MYSQL_TARGET_TABLE);
+      mysqlPstmt = mysqlConn.prepareStatement(mysqlInsertSql);
 
-      // 5. 打印结果表头
-      System.out.println("流域面积等级\t流域数量\t农业磷肥总量\t畜禽粪便磷总量\t点源磷总量\t磷肥占比(%)\t粪便磷占比(%)\t点源磷占比(%)");
-      // 6. 遍历结果集
+      // 6. 执行Hive查询
+      hiveStmt = hiveConn.createStatement();
+      rs = hiveStmt.executeQuery(hiveSql);
+
+      // 7. 遍历结果集并批量插入MySQL
+      int batchCount = 0;
+      final int BATCH_SIZE = 50; // 批量提交大小（数据量小，设为50即可）
       while (rs.next()) {
         String areaGrade = rs.getString("area_grade");
         int basinCount = rs.getInt("basin_count");
@@ -69,23 +90,61 @@ public class PhosphorusPollutionByBasinArea {
         double manureRatio = rs.getDouble("manure_ratio");
         double pointSourceRatio = rs.getDouble("point_source_ratio");
 
-        // 格式化输出结果
-        System.out.printf("%s\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f%n",
-                areaGrade, basinCount, farmFertTotal, manureTotal, pointSourceTotal,
-                farmFertRatio, manureRatio, pointSourceRatio);
+        // 设置插入参数
+        mysqlPstmt.setString(1, areaGrade);
+        mysqlPstmt.setInt(2, basinCount);
+        mysqlPstmt.setDouble(3, farmFertTotal);
+        mysqlPstmt.setDouble(4, manureTotal);
+        mysqlPstmt.setDouble(5, pointSourceTotal);
+        mysqlPstmt.setDouble(6, farmFertRatio);
+        mysqlPstmt.setDouble(7, manureRatio);
+        mysqlPstmt.setDouble(8, pointSourceRatio);
+
+        // 添加到批处理
+        mysqlPstmt.addBatch();
+        batchCount++;
+
+        // 达到批量大小提交
+        if (batchCount % BATCH_SIZE == 0) {
+          mysqlPstmt.executeBatch();
+          mysqlConn.commit();
+          System.out.printf("已批量插入 %d 条数据%n", batchCount);
+        }
       }
 
+      // 处理剩余数据
+      if (batchCount > 0 && batchCount % BATCH_SIZE != 0) {
+        mysqlPstmt.executeBatch();
+        mysqlConn.commit();
+        System.out.printf("最终提交剩余数据，总计插入 %d 条数据%n", batchCount);
+      }
+
+      System.out.println("磷污染数据已成功导入MySQL（american_data_analysis数据库）！");
+
     } catch (ClassNotFoundException e) {
-      System.err.println("Hive JDBC驱动加载失败：" + e.getMessage());
+      System.err.println("驱动加载失败：" + e.getMessage());
+      e.printStackTrace();
     } catch (SQLException e) {
-      System.err.println("Hive查询执行异常：" + e.getMessage());
-      e.printStackTrace(); // 打印完整异常栈，便于定位SQL/连接问题
+      System.err.println("数据库操作异常：" + e.getMessage());
+      e.printStackTrace();
+      // 事务回滚
+      try {
+        if (mysqlConn != null) {
+          mysqlConn.rollback();
+          System.out.println("MySQL事务已回滚");
+        }
+      } catch (SQLException rollbackEx) {
+        System.err.println("事务回滚失败：" + rollbackEx.getMessage());
+      }
     } finally {
-      // 7. 关闭资源
+      // 关闭所有资源
       try {
         if (rs != null) rs.close();
-        if (stmt != null) stmt.close();
-        if (conn != null) conn.close();
+        if (mysqlPstmt != null) mysqlPstmt.close();
+        if (hiveStmt != null) hiveStmt.close();
+        if (mysqlConn != null) mysqlConn.close();
+        if (hiveConn != null) hiveConn.close();
+        System.out.println("数据库连接已全部关闭");
       } catch (SQLException e) {
         System.err.println("资源关闭异常：" + e.getMessage());
       }

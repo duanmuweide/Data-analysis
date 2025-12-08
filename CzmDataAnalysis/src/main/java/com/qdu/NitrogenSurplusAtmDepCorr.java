@@ -13,7 +13,7 @@ public class NitrogenSurplusAtmDepCorr {
   private static final String HIVE_PASSWORD = "";
 
   // UDF相关SQL
-  private static final String ADD_JAR_SQL = "ADD JAR hdfs:///user/hive/udf/CorrCoefficientUDF.jar;";
+  private static final String ADD_JAR_SQL = "ADD JAR hdfs://master-pc:9870/user/hive/udf/CzmDataAnalysis-1.0-SNAPSHOT.jar;";
   private static final String CREATE_UDF_SQL =
           "CREATE TEMPORARY FUNCTION calc_corr_aux AS 'com.qdu.CorrCoefficientUDF';";
 
