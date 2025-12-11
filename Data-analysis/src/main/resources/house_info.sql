@@ -80,4 +80,29 @@ WHERE district IS NOT NULL
   AND price > 0
   AND build_year REGEXP '^[0-9]{4}$';
 
-
+-- 北京每个区平均房价表
+CREATE TABLE IF NOT EXISTS dataanalysis.district_house_price_analysis (
+    district STRING COMMENT '市区名称',
+    avg_price_per_sqm INT COMMENT '平均房价(元/平方米)',
+    house_count INT COMMENT '房屋数量',
+    min_price INT COMMENT '最低单价',
+    max_price INT COMMENT '最高单价',
+    median_price INT COMMENT '中位数单价',
+    price_variance INT COMMENT '价格方差',
+    std_price INT COMMENT '价格标准差',
+    avg_house_age INT COMMENT '平均房龄(年)',
+    avg_area INT COMMENT '平均面积(㎡)'
+)
+    COMMENT '北京市区房价统计分析表（全INT类型，已移除new_house_ratio列）'
+    PARTITIONED BY (load_date STRING COMMENT '数据加载日期')
+    CLUSTERED BY (avg_price_per_sqm)
+    SORTED BY (district ASC)
+    INTO 5 BUCKETS
+    STORED AS ORC
+    TBLPROPERTIES (
+                      'orc.compress' = 'SNAPPY',
+                      'orc.create.index' = 'true',
+                      'orc.bloom.filter.columns' = 'district',
+                      'orc.row.index.stride' = '10000',
+                      'transactional' = 'false'
+                  );
