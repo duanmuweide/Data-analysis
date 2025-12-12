@@ -1,217 +1,174 @@
 package com.qdu;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.*;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.*;
-import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.util.Bytes;
 
 import java.io.IOException;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 流域营养盐盈余HBase操作工具类
- * 包含：建表、数据写入、趋势查询
+ * 修复版：HBase查询 → 写入MySQL（解决Connection类型冲突、方法找不到问题）
  */
 public class WatershedNutrientHBaseUtil {
-  // HBase配置（需替换为集群实际地址）
-  private static final String HBASE_ZK_QUORUM = "master-pc"; // ZK地址
-  private static final String HBASE_ZK_PORT = "2181"; // ZK端口
-  private static final String NAMESPACE = "watershed_hbase";
-  private static final String TABLE_NAME = NAMESPACE + ".nutrient_surplus";
+  // -------------------------- 1. 核心配置（替换为你的实际信息） --------------------------
+  // HBase配置
+  private static final String HBASE_ZK = "master-pc";
+  private static final String HBASE_TABLE = "watershed_hbase.nutrient_surplus";
 
-  // 列族定义
-  public static final byte[] CF_BASIC = Bytes.toBytes("cf_basic");    // 基础信息
-  public static final byte[] CF_SURPLUS = Bytes.toBytes("cf_surplus");// 盈余数据
-  public static final byte[] CF_EMISSION = Bytes.toBytes("cf_emission");// 排放数据
+  // MySQL配置（关键：替换为你的MySQL信息）
+  private static final String MYSQL_URL = "jdbc:mysql://localhost:3306/american_data_analysis?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
+  private static final String MYSQL_USER = "root";       // 你的MySQL账号
+  private static final String MYSQL_PWD = "Czm982376";// 你的MySQL密码
+  private static final String MYSQL_TABLE = "watershed_surplus_trend"; // MySQL表名
 
-  // 列名定义
-  public static final byte[] COL_AREA_SQKM = Bytes.toBytes("area_sqkm");
-  public static final byte[] COL_YEAR = Bytes.toBytes("year");
-  public static final byte[] COL_N_AG_SURPLUS = Bytes.toBytes("n_ag_surplus_kgsqkm");
-  public static final byte[] COL_P_AG_SURPLUS = Bytes.toBytes("p_ag_surplus_kgsqkm");
-  public static final byte[] COL_N_EMIS_TOTAL = Bytes.toBytes("n_emis_total_kgsqkm");
-  public static final byte[] COL_P_POINT_SOURCE = Bytes.toBytes("p_point_source_kgsqkm");
+  // HBase列定义
+  private static final byte[] CF_BASIC = Bytes.toBytes("cf_basic");
+  private static final byte[] CF_SURPLUS = Bytes.toBytes("cf_surplus");
+  private static final byte[] COL_YEAR = Bytes.toBytes("year");
+  private static final byte[] COL_N_SURPLUS = Bytes.toBytes("n_ag_surplus_kgsqkm");
+  private static final byte[] COL_P_SURPLUS = Bytes.toBytes("p_ag_surplus_kgsqkm");
 
-  /**
-   * 初始化HBase配置
-   */
-  private static Configuration getHBaseConfig() {
-    Configuration conf = HBaseConfiguration.create();
-    conf.set("hbase.zookeeper.quorum", HBASE_ZK_QUORUM);
-    conf.set("hbase.zookeeper.property.clientPort", HBASE_ZK_PORT);
-    conf.set("hbase.client.retries.number", "3"); // 重试次数
+  // -------------------------- 2. 数据实体类 --------------------------
+  static class TrendData {
+    String fips;
+    int year;
+    double nSurplus;
+    double pSurplus;
+
+    TrendData(String fips, int year, double nSurplus, double pSurplus) {
+      this.fips = fips;
+      this.year = year;
+      this.nSurplus = nSurplus;
+      this.pSurplus = pSurplus;
+    }
+  }
+
+  // -------------------------- 3. HBase配置初始化 --------------------------
+  private static Configuration getHBaseConf() {
+    Configuration conf = org.apache.hadoop.hbase.HBaseConfiguration.create();
+    conf.set("hbase.zookeeper.quorum", HBASE_ZK);
+    conf.set("hbase.zookeeper.property.clientPort", "2181");
     return conf;
   }
 
-  /**
-   * 1. 创建命名空间和表（仅需执行一次）
-   */
-  public static void createTable() throws IOException {
-    try (Connection conn = ConnectionFactory.createConnection(getHBaseConfig());
-         Admin admin = conn.getAdmin()) {
+  // -------------------------- 4. HBase查询（显式用HBase的Connection） --------------------------
+  private static List<TrendData> queryHBase(String fips, int startYear, int endYear) throws IOException {
+    List<TrendData> trendList = new ArrayList<>();
 
-      // Step1: 创建命名空间（如果不存在）
-      NamespaceDescriptor namespaceDesc = NamespaceDescriptor.create(NAMESPACE)
-              .addConfiguration("description", "流域营养盐数据存储")
-              .build();
-      try {
-        admin.createNamespace(namespaceDesc);
-        System.out.println("命名空间 " + NAMESPACE + " 创建成功");
-      } catch (NamespaceExistException e) {
-        System.out.println("命名空间 " + NAMESPACE + " 已存在，跳过创建");
-      }
+    // 显式声明：HBase的Connection
+    org.apache.hadoop.hbase.client.Connection hbaseConn = null;
+    Table table = null;
+    ResultScanner scanner = null;
 
-      // Step2: 创建表（多列族）
-      TableName tableName = TableName.valueOf(TABLE_NAME);
-      if (admin.tableExists(tableName)) {
-        System.out.println("表 " + TABLE_NAME + " 已存在，跳过创建");
-        return;
-      }
+    try {
+      hbaseConn = ConnectionFactory.createConnection(getHBaseConf());
+      table = hbaseConn.getTable(TableName.valueOf(HBASE_TABLE));
 
-      // 定义列族（设置版本数=1，仅保留最新值）
-      ColumnFamilyDescriptor cfBasic = ColumnFamilyDescriptorBuilder.newBuilder(CF_BASIC)
-              .setMaxVersions(1)
-              .build(); // 去掉压缩配置，使用默认无压缩
+      // 构建RowKey范围
+      String revFips = new StringBuilder(fips).reverse().toString();
+      String startRow = revFips + "_" + String.format("%04d", startYear);
+      String stopRow = revFips + "_" + String.format("%04d", endYear + 1);
 
-      ColumnFamilyDescriptor cfSurplus = ColumnFamilyDescriptorBuilder.newBuilder(CF_SURPLUS)
-              .setMaxVersions(1)
-              .build();
-
-      ColumnFamilyDescriptor cfEmission = ColumnFamilyDescriptorBuilder.newBuilder(CF_EMISSION)
-              .setMaxVersions(1)
-              .build();
-
-      // 创建表
-      TableDescriptor tableDesc = TableDescriptorBuilder.newBuilder(tableName)
-              .setColumnFamily(cfBasic)
-              .setColumnFamily(cfSurplus)
-              .setColumnFamily(cfEmission)
-              .build();
-      admin.createTable(tableDesc);
-      System.out.println("表 " + TABLE_NAME + " 创建成功");
-    }
-  }
-
-  /**
-   * 2. RowKey生成工具（核心：反转FIPS + 补位年份）
-   * @param fips 流域FIPS编码（如"38001"）
-   * @param year 年份（如2020）
-   * @return 格式：反转FIPS_补位年份（如"38001"反转→"10083"，拼接2020→"10083_2020"）
-   */
-  public static String generateRowKey(String fips, int year) {
-    // Step1: 反转FIPS（避免连续FIPS导致热点）
-    String reversedFips = new StringBuilder(fips).reverse().toString();
-    // Step2: 年份补4位（避免"10001_9" < "10001_10"的排序问题）
-    String paddedYear = String.format("%04d", year);
-    // Step3: 拼接RowKey
-    return reversedFips + "_" + paddedYear;
-  }
-
-  /**
-   * 3. 写入单条流域数据到HBase
-   * @param fips 流域FIPS
-   * @param year 年份
-   * @param areaSqkm 流域面积
-   * @param nAgSurplus 氮农业盈余
-   * @param pAgSurplus 磷农业盈余
-   * @param nEmisTotal 总氮排放
-   * @param pPointSource 点源磷排放
-   */
-  public static void putWatershedData(String fips, int year, double areaSqkm,
-                                      double nAgSurplus, double pAgSurplus,
-                                      double nEmisTotal, double pPointSource) throws IOException {
-    try (Connection conn = ConnectionFactory.createConnection(getHBaseConfig());
-         Table table = conn.getTable(TableName.valueOf(TABLE_NAME))) {
-
-      // 生成RowKey
-      String rowKey = generateRowKey(fips, year);
-      Put put = new Put(Bytes.toBytes(rowKey));
-
-      // 写入基础信息列族
-      put.addColumn(CF_BASIC, COL_YEAR, Bytes.toBytes(year));
-      put.addColumn(CF_BASIC, COL_AREA_SQKM, Bytes.toBytes(areaSqkm));
-
-      // 写入盈余列族
-      put.addColumn(CF_SURPLUS, COL_N_AG_SURPLUS, Bytes.toBytes(nAgSurplus));
-      put.addColumn(CF_SURPLUS, COL_P_AG_SURPLUS, Bytes.toBytes(pAgSurplus));
-
-      // 写入排放列族
-      put.addColumn(CF_EMISSION, COL_N_EMIS_TOTAL, Bytes.toBytes(nEmisTotal));
-      put.addColumn(CF_EMISSION, COL_P_POINT_SOURCE, Bytes.toBytes(pPointSource));
-
-      // 写入数据（批量写入可改用putBatch）
-      table.put(put);
-      System.out.println("数据写入成功：RowKey=" + rowKey);
-    }
-  }
-
-  /**
-   * 4. 核心场景：查询特定流域多年氮磷盈余变化趋势
-   * @param targetFips 目标流域FIPS（原始值，如"38001"）
-   * @param startYear 起始年份
-   * @param endYear 结束年份
-   */
-  public static void querySurplusTrend(String targetFips, int startYear, int endYear) throws IOException {
-    try (Connection conn = ConnectionFactory.createConnection(getHBaseConfig());
-         Table table = conn.getTable(TableName.valueOf(TABLE_NAME))) {
-
-      // Step1: 构建扫描范围（基于反转FIPS）
-      String reversedFips = new StringBuilder(targetFips).reverse().toString();
-      // 起始RowKey：反转FIPS_起始年份（补4位）
-      String startRowKey = reversedFips + "_" + String.format("%04d", startYear);
-      // 结束RowKey：反转FIPS_结束年份+1（HBase stopRow是开区间）
-      String stopRowKey = reversedFips + "_" + String.format("%04d", endYear + 1);
-
-      // Step2: 构建扫描器（只查需要的列，减少IO）
-      Scan scan = new Scan();
-      scan.withStartRow(Bytes.toBytes(startRowKey));
-      scan.withStopRow(Bytes.toBytes(stopRowKey));
-      // 指定列族+列，避免全表扫描
+      // 扫描HBase数据
+      Scan scan = new Scan(Bytes.toBytes(startRow), Bytes.toBytes(stopRow));
       scan.addColumn(CF_BASIC, COL_YEAR);
-      scan.addColumn(CF_SURPLUS, COL_N_AG_SURPLUS);
-      scan.addColumn(CF_SURPLUS, COL_P_AG_SURPLUS);
-      // 设置缓存（提升扫描效率）
-      scan.setCaching(100);
-      scan.setCacheBlocks(false);
+      scan.addColumn(CF_SURPLUS, COL_N_SURPLUS);
+      scan.addColumn(CF_SURPLUS, COL_P_SURPLUS);
 
-      // Step3: 执行扫描并处理结果
-      ResultScanner scanner = table.getScanner(scan);
-      System.out.printf("===== 流域%s（%d-%d年）氮磷盈余趋势 =====%n", targetFips, startYear, endYear);
-      System.out.println("年份\t氮盈余(kgsqkm)\t磷盈余(kgsqkm)");
-      for (Result result : scanner) {
-        // 解析RowKey和列值
-        String rowKey = Bytes.toString(result.getRow());
-        int year = Bytes.toInt(result.getValue(CF_BASIC, COL_YEAR));
-        // 容错：避免空值导致NPE
-        double nSurplus = result.containsColumn(CF_SURPLUS, COL_N_AG_SURPLUS)
-                ? Bytes.toDouble(result.getValue(CF_SURPLUS, COL_N_AG_SURPLUS)) : 0.0;
-        double pSurplus = result.containsColumn(CF_SURPLUS, COL_P_AG_SURPLUS)
-                ? Bytes.toDouble(result.getValue(CF_SURPLUS, COL_P_AG_SURPLUS)) : 0.0;
-
-        // 输出结果（可替换为写入MySQL/返回前端）
-        System.out.printf("%d\t%.2f\t\t%.2f%n", year, nSurplus, pSurplus);
+      scanner = table.getScanner(scan);
+      for (Result res : scanner) {
+        int year = Bytes.toInt(res.getValue(CF_BASIC, COL_YEAR));
+        double n = res.containsColumn(CF_SURPLUS, COL_N_SURPLUS) ?
+                Bytes.toDouble(res.getValue(CF_SURPLUS, COL_N_SURPLUS)) : 0.0;
+        double p = res.containsColumn(CF_SURPLUS, COL_P_SURPLUS) ?
+                Bytes.toDouble(res.getValue(CF_SURPLUS, COL_P_SURPLUS)) : 0.0;
+        trendList.add(new TrendData(fips, year, n, p));
       }
-      scanner.close(); // 关闭扫描器释放资源
+      System.out.println("✅ HBase查询完成，共" + trendList.size() + "条数据");
+    } finally {
+      // 关闭HBase资源
+      if (scanner != null) scanner.close();
+      if (table != null) table.close();
+      if (hbaseConn != null) hbaseConn.close();
+    }
+    return trendList;
+  }
+
+  // -------------------------- 5. 写入MySQL（显式用JDBC的Connection） --------------------------
+  private static void writeToMySQL(List<TrendData> trendList) throws ClassNotFoundException, SQLException {
+    if (trendList.isEmpty()) {
+      System.out.println("⚠️ 无数据可写入MySQL");
+      return;
+    }
+
+    // 加载MySQL驱动
+    Class.forName("com.mysql.cj.jdbc.Driver");
+
+    // 显式声明：JDBC的Connection（解决类型冲突核心！）
+    java.sql.Connection mysqlConn = null;
+    PreparedStatement pstmt = null;
+
+    try {
+      mysqlConn = DriverManager.getConnection(MYSQL_URL, MYSQL_USER, MYSQL_PWD);
+      // 批量写入SQL（防重复）
+      String sql = "INSERT INTO " + MYSQL_TABLE + " (fips, year, n_surplus, p_surplus) VALUES (?, ?, ?, ?) " +
+              "ON DUPLICATE KEY UPDATE n_surplus=VALUES(n_surplus), p_surplus=VALUES(p_surplus)";
+      pstmt = mysqlConn.prepareStatement(sql);
+
+      // 关闭自动提交，批量执行
+      mysqlConn.setAutoCommit(false);
+      int count = 0;
+
+      for (TrendData data : trendList) {
+        pstmt.setString(1, data.fips);
+        pstmt.setInt(2, data.year);
+        pstmt.setDouble(3, data.nSurplus);
+        pstmt.setDouble(4, data.pSurplus);
+        pstmt.addBatch();
+        count++;
+
+        // 每100条提交一次
+        if (count % 100 == 0) {
+          pstmt.executeBatch();
+          mysqlConn.commit();
+          System.out.println("✅ MySQL已写入" + count + "条数据");
+        }
+      }
+
+      // 提交剩余数据
+      pstmt.executeBatch();
+      mysqlConn.commit();
+      System.out.println("✅ MySQL写入完成，累计" + count + "条数据");
+
+    } catch (SQLException e) {
+      // 回滚事务
+      if (mysqlConn != null) mysqlConn.rollback();
+      System.err.println("❌ MySQL写入失败：" + e.getMessage());
+      throw e;
+    } finally {
+      // 关闭MySQL资源
+      if (pstmt != null) pstmt.close();
+      if (mysqlConn != null) mysqlConn.close();
     }
   }
 
-  // 测试主方法
+  // -------------------------- 6. 主方法（全流程入口） --------------------------
   public static void main(String[] args) {
     try {
-      // 1. 初始化表（仅首次执行）
-      createTable();
+      // 1. HBase查询（替换为你的FIPS）
+      List<TrendData> trendData = queryHBase("10005", 2010, 2020);
 
-      // 2. 模拟写入测试数据
-      putWatershedData("38001", 2010, 2500.5, 120.5, 80.2, 300.1, 50.3);
-      putWatershedData("38001", 2015, 2500.5, 135.7, 85.9, 320.5, 55.8);
-      putWatershedData("38001", 2020, 2500.5, 142.3, 90.1, 350.2, 60.5);
+      // 2. 写入MySQL
+      writeToMySQL(trendData);
 
-      // 3. 查询38001流域2010-2020年氮磷盈余趋势
-      querySurplusTrend("38001", 2010, 2020);
+      System.out.println("\n🎉 全流程执行完成：HBase查询 → MySQL写入");
 
-    } catch (IOException e) {
+    } catch (Exception e) {
+      System.err.println("\n❌ 执行失败：" + e.getMessage());
       e.printStackTrace();
     }
   }
