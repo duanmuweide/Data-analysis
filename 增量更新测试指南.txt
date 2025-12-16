@@ -1,0 +1,298 @@
+# Hive增量更新功能测试指南
+
+## 1. 测试目的
+验证Hive分析脚本的版本控制和增量更新功能是否正常工作，确保：
+- 系统能正确记录每次分析的版本信息
+- 当有新数据时，只处理新增数据，避免重复查询
+- 结果表中能正确保存不同版本的分析结果
+- 版本控制表能准确记录数据处理的时间范围和记录数
+
+## 2. 测试环境准备
+
+### 2.1 检查服务状态
+确保Hadoop、Hive服务已启动：
+
+```bash
+# 检查Hadoop状态
+hdfs dfsadmin -report
+
+# 检查Hive服务
+jps | grep -E "HiveServer2|Metastore"
+
+# 如果未启动，执行以下命令
+sbin/start-all.sh  # 启动Hadoop
+nohup hive --service metastore &  # 启动Hive Metastore
+nohup hive --service hiveserver2 &  # 启动Hive Server2
+```
+
+### 2.2 检查初始数据
+
+```bash
+# 查看原始表结构
+hive -e "USE crime_analysis; DESC crime_incidents;"
+
+# 查看当前数据量
+hive -e "USE crime_analysis; SELECT COUNT(*) FROM crime_incidents;"
+
+# 查看最新数据时间
+hive -e "USE crime_analysis; SELECT MAX(dispatch_time) FROM crime_incidents;"
+```
+
+## 3. 测试步骤
+
+### 3.1 第一次运行分析（全量数据）
+
+```bash
+# 执行Hive分析脚本
+./run_hive_analysis.sh
+```
+
+### 3.2 验证第一次运行结果
+
+```bash
+# 查看版本控制表
+hive -e "USE crime_analysis; SELECT * FROM analysis_version ORDER BY version_id DESC;"
+
+# 查看任意结果表
+hive -e "USE crime_analysis; SELECT * FROM crime_by_city_type ORDER BY version_id DESC LIMIT 20;"
+
+# 记录当前版本号和数据时间范围
+CURRENT_VERSION=$(hive -e "USE crime_analysis; SELECT MAX(version_id) FROM analysis_version;")
+MAX_TIME=$(hive -e "USE crime_analysis; SELECT data_date_to FROM analysis_version WHERE version_id = $CURRENT_VERSION;")
+```
+
+### 3.3 添加测试数据
+
+```bash
+# 创建临时表用于插入测试数据
+hive -e "USE crime_analysis; CREATE TABLE IF NOT EXISTS test_new_data AS SELECT * FROM crime_incidents WHERE 1=0;"
+
+# 插入新数据（模拟新的犯罪记录）
+hive -e "USE crime_analysis; INSERT INTO test_new_data VALUES \
+('NEW_INCIDENT_001', '00A', 'CR123456', 'A001', '2025-12-15 10:30:00', '2025-12-15 10:25:00', '2025-12-15 10:35:00', '123 MAIN ST', 'BALTIMORE', 'MD', '21201', 39.2904, -76.6122, '123', 'N', 'MAIN', 'ST', 'STREET', 'CENTRAL', 'BPD', 'RESIDENCE', 'C', '12', '101', '1', 2025, 12, 15), \
+('NEW_INCIDENT_002', '00B', 'CR123457', 'B002', '2025-12-15 11:00:00', '2025-12-15 10:55:00', '2025-12-15 11:10:00', '456 OAK AVE', 'CHICAGO', 'IL', '60601', 41.8781, -87.6298, '456', 'S', 'OAK', 'AVE', 'AVENUE', 'SOUTH', 'CPD', 'COMMERCIAL', 'S', '23', '202', '2', 2025, 12, 15);"
+
+# 将新数据插入原始表
+hive -e "USE crime_analysis; INSERT INTO crime_incidents SELECT * FROM test_new_data;"
+
+# 验证新数据已添加
+hive -e "USE crime_analysis; SELECT COUNT(*) FROM crime_incidents WHERE dispatch_time > '$MAX_TIME';"
+```
+
+### 3.4 第二次运行分析（增量数据）
+
+```bash
+# 执行Hive分析脚本
+./run_hive_analysis.sh
+```
+
+### 3.5 验证增量更新结果
+
+```bash
+# 查看版本控制表（应该有新的版本记录）
+hive -e "USE crime_analysis; SELECT * FROM analysis_version ORDER BY version_id DESC LIMIT 15;"
+
+# 检查新版本信息
+NEW_VERSION=$(hive -e "USE crime_analysis; SELECT MAX(version_id) FROM analysis_version;")
+NEW_DATA_COUNT=$(hive -e "USE crime_analysis; SELECT record_count FROM analysis_version WHERE version_id = $NEW_VERSION;")
+
+# 验证新版本是否正确记录了新数据的时间范围
+hive -e "USE crime_analysis; SELECT data_date_from, data_date_to, record_count FROM analysis_version WHERE version_id = $NEW_VERSION;"
+
+# 验证结果表中是否有新版本的数据
+# 示例：查看城市犯罪类型统计结果
+hive -e "USE crime_analysis; SELECT * FROM crime_by_city_type WHERE version_id = $NEW_VERSION ORDER BY city, crime_name1;"
+
+# 验证旧版本数据是否仍然存在
+hive -e "USE crime_analysis; SELECT * FROM crime_by_city_type WHERE version_id = $CURRENT_VERSION ORDER BY city, crime_name1 LIMIT 10;"
+```
+
+### 3.6 验证增量查询逻辑
+
+```bash
+# 检查是否只有新增数据被处理
+# 方法1：比较版本间的记录数差异
+hive -e "USE crime_analysis; \
+SELECT \
+    a.version_id, \
+    a.analysis_name, \
+    a.record_count, \
+    b.record_count AS prev_record_count \
+FROM analysis_version a \
+LEFT JOIN analysis_version b ON a.version_id = b.version_id + 1 \
+ORDER BY a.version_id DESC;"
+
+# 方法2：直接查询新添加的数据
+# 应该能找到我们手动添加的两条测试记录
+hive -e "USE crime_analysis; \
+SELECT * FROM crime_incidents \
+WHERE incident_id IN ('NEW_INCIDENT_001', 'NEW_INCIDENT_002');"
+```
+
+## 4. 常见问题排查
+
+### 4.1 版本控制表未更新
+
+**可能原因：**
+- Hive服务未正常运行
+- SQL脚本执行失败
+- 权限问题
+
+**排查方法：**
+```bash
+# 检查Hive日志
+cat /tmp/$USER/hive.log | grep -i error
+
+# 检查脚本执行日志
+cat hive_analysis_*.log | grep -i error
+```
+
+### 4.2 增量数据未被处理
+
+**可能原因：**
+- 新数据的时间戳未超过上一次处理的最大时间
+- 数据时间格式不正确
+- WHERE条件逻辑错误
+
+**排查方法：**
+```bash
+# 检查新数据的时间戳
+hive -e "USE crime_analysis; SELECT dispatch_time FROM crime_incidents WHERE incident_id IN ('NEW_INCIDENT_001', 'NEW_INCIDENT_002');"
+
+# 检查上一次处理的最大时间
+hive -e "USE crime_analysis; SELECT MAX(data_date_to) FROM analysis_version;"
+```
+
+### 4.3 结果表中没有新版本数据
+
+**可能原因：**
+- 插入语句执行失败
+- 版本ID生成错误
+- 事务处理失败
+
+**排查方法：**
+```bash
+# 检查Hive执行日志
+cat /tmp/$USER/hive.log | grep -A 10 -B 10 "INSERT INTO"
+
+# 手动执行SQL中的插入语句
+hive -f hive统计分析.sql --hiveconf hive.root.logger=INFO,console
+```
+
+## 5. 测试验证标准
+
+### 5.1 成功标准
+1. ✅ 版本控制表中能看到多条版本记录，每次运行版本号递增
+2. ✅ 新版本记录的data_date_from和data_date_to能正确反映新数据的时间范围
+3. ✅ record_count字段能准确记录每次处理的数据量
+4. ✅ 结果表中能看到不同版本ID的数据记录
+5. ✅ 新数据的分析结果能在最新版本中找到
+6. ✅ 旧版本数据仍然存在，未被覆盖
+
+### 5.2 失败情况
+1. ❌ 版本控制表只有一条记录，版本号不递增
+2. ❌ 新版本记录的时间范围与旧版本相同
+3. ❌ 结果表中只有一个版本的数据
+4. ❌ 新添加的数据未出现在分析结果中
+5. ❌ 每次运行分析处理的记录数相同（表示全量处理而非增量）
+
+## 6. 清理测试数据
+
+测试完成后，可以清理测试数据：
+
+```bash
+# 删除测试表
+hive -e "USE crime_analysis; DROP TABLE IF EXISTS test_new_data;"
+
+# 删除测试数据（如果需要）
+hive -e "USE crime_analysis; DELETE FROM crime_incidents WHERE incident_id IN ('NEW_INCIDENT_001', 'NEW_INCIDENT_002');"
+
+# 重置版本控制表（如果需要）
+hive -e "USE crime_analysis; TRUNCATE TABLE analysis_version;"
+
+# 重置结果表（如果需要）
+hive -e "USE crime_analysis; TRUNCATE TABLE crime_by_city_type;"
+hive -e "USE crime_analysis; TRUNCATE TABLE top_crime_cities_monthly;"
+hive -e "USE crime_analysis; TRUNCATE TABLE crime_time_patterns;"
+hive -e "USE crime_analysis; TRUNCATE TABLE crime_bucketed_stats;"
+hive -e "USE crime_analysis; TRUNCATE TABLE crime_by_place_type;"
+hive -e "USE crime_analysis; TRUNCATE TABLE crime_victims_analysis;"
+hive -e "USE crime_analysis; TRUNCATE TABLE crime_trend_analysis;"
+```
+
+## 7. 日常使用建议
+
+### 7.1 定期执行分析
+
+```bash
+# 每天定时执行分析（使用crontab）
+0 2 * * * /path/to/run_hive_analysis.sh
+
+# 每周执行一次完整分析
+0 2 * * 0 /path/to/run_hive_analysis.sh
+```
+
+### 7.2 查看历史版本
+
+```bash
+# 查看所有版本记录
+hive -e "USE crime_analysis; SELECT * FROM analysis_version ORDER BY version_id DESC;"
+
+# 查看特定分析的版本历史
+hive -e "USE crime_analysis; SELECT * FROM analysis_version WHERE analysis_name = 'crime_by_city_type' ORDER BY version_id DESC;"
+
+# 查看特定版本的分析结果
+hive -e "USE crime_analysis; SELECT * FROM crime_by_city_type WHERE version_id = 3 ORDER BY city, crime_name1;"
+```
+
+### 7.3 比较不同版本的结果
+
+```bash
+# 示例：比较两个版本的城市犯罪统计
+hive -e "USE crime_analysis; \
+SELECT \
+    a.city, \
+    a.crime_name1, \
+    a.crime_count AS version_1_count, \
+    b.crime_count AS version_2_count, \
+    (b.crime_count - a.crime_count) AS count_diff \
+FROM crime_by_city_type a \
+JOIN crime_by_city_type b ON a.city = b.city AND a.crime_name1 = b.crime_name1 \
+WHERE a.version_id = 2 AND b.version_id = 3 \
+ORDER BY count_diff DESC;"
+```
+
+## 8. 性能优化建议
+
+### 8.1 合理设置数据分区
+
+```bash
+# 如果原始表未分区，可以考虑分区以提高查询效率
+hive -e "USE crime_analysis; \
+CREATE TABLE crime_incidents_partitioned (
+    -- 字段列表
+) \
+PARTITIONED BY (year INT, month INT, day INT) \
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' \
+STORED AS TEXTFILE;"
+```
+
+### 8.2 调整版本保留策略
+
+```bash
+# 定期清理旧版本数据，只保留最近N个版本
+hive -e "USE crime_analysis; \
+DELETE FROM crime_by_city_type \
+WHERE version_id < (SELECT MAX(version_id) - 5 FROM crime_by_city_type);"
+```
+
+### 8.3 优化Hive执行参数
+
+```bash
+# 在脚本中添加Hive优化参数
+hive -e "SET hive.exec.parallel=true; SET hive.exec.parallel.thread.number=8; SET hive.vectorized.execution.enabled=true;" -f hive统计分析.sql
+```
+
+---
+
+**测试完成后，请记录测试结果并保存日志文件，以便后续分析和问题排查。**

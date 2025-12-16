@@ -1,0 +1,341 @@
+# Hive分析结果导出到MySQL指南
+
+## 方法1：使用Sqoop工具导出数据
+
+### 步骤1：在MySQL中创建目标表
+
+```sql
+-- 登录MySQL
+mysql -u root -p
+
+-- 创建数据库
+CREATE DATABASE IF NOT EXISTS crime_analysis;
+USE crime_analysis;
+
+-- 创建存储犯罪统计结果的表
+CREATE TABLE city_crime_statistics (
+    city VARCHAR(100) NOT NULL,
+    crime_name VARCHAR(100) NOT NULL,
+    crime_count INT NOT NULL,
+    avg_victims DECIMAL(10,2) DEFAULT 0,
+    max_victims INT DEFAULT 0,
+    year INT NOT NULL,
+    month INT NOT NULL,
+    PRIMARY KEY (city, crime_name, year, month)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- 创建存储月度犯罪统计的表
+CREATE TABLE monthly_crime_top_cities (
+    year INT NOT NULL,
+    month INT NOT NULL,
+    city VARCHAR(100) NOT NULL,
+    crime_count INT NOT NULL,
+    rank INT NOT NULL,
+    PRIMARY KEY (year, month, city)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- 创建存储犯罪时间模式的表
+CREATE TABLE crime_time_pattern (
+    hour_of_day INT NOT NULL,
+    crime_count INT NOT NULL,
+    affected_cities INT NOT NULL,
+    avg_duration_minutes DECIMAL(10,2) DEFAULT 0,
+    PRIMARY KEY (hour_of_day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- 创建存储犯罪地点类型分析的表
+CREATE TABLE crime_place_analysis (
+    place VARCHAR(100) NOT NULL,
+    crime_count INT NOT NULL,
+    avg_victims DECIMAL(10,2) DEFAULT 0,
+    total_victims INT DEFAULT 0,
+    total_yearly_crime INT NOT NULL,
+    percentage DECIMAL(10,4) DEFAULT 0,
+    PRIMARY KEY (place)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- 创建存储犯罪严重程度分析的表
+CREATE TABLE crime_severity_analysis (
+    severity VARCHAR(20) NOT NULL,
+    crime_count INT NOT NULL,
+    avg_victims DECIMAL(10,2) DEFAULT 0,
+    affected_cities INT NOT NULL,
+    PRIMARY KEY (severity)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+```
+
+### 步骤2：使用Sqoop导出数据
+
+#### 2.1 导出城市犯罪统计数据
+
+```bash
+# 使用Sqoop将Hive表数据导出到MySQL
+sqoop export \
+  --connect jdbc:mysql://mysql-server:3306/crime_analysis \
+  --username root \
+  --password your_password \
+  --table city_crime_statistics \
+  --export-dir /user/hive/warehouse/crime_analysis.db/city_crime_stats \
+  --input-fields-terminated-by '\001' \
+  --input-lines-terminated-by '\n' \
+  --input-null-string '\\N' \
+  --input-null-non-string '\\N' \
+  --batch
+```
+
+#### 2.2 导出月度犯罪统计数据
+
+```bash
+sqoop export \
+  --connect jdbc:mysql://mysql-server:3306/crime_analysis \
+  --username root \
+  --password your_password \
+  --table monthly_crime_top_cities \
+  --export-dir /user/hive/warehouse/crime_analysis.db/monthly_crime_stats \
+  --input-fields-terminated-by '\001' \
+  --input-lines-terminated-by '\n' \
+  --input-null-string '\\N' \
+  --input-null-non-string '\\N' \
+  --batch
+```
+
+## 方法2：使用Hive的JDBC连接直接导出
+
+### 步骤1：准备Hive分析结果表
+
+```sql
+-- 在Hive中创建分析结果表
+CREATE TABLE city_crime_stats AS
+SELECT 
+    city, 
+    crime_name1 AS crime_name, 
+    COUNT(*) AS crime_count,
+    AVG(victims) AS avg_victims,
+    MAX(victims) AS max_victims,
+    year,
+    month
+FROM crime_incidents
+WHERE year = 2023 AND month = 12
+GROUP BY city, crime_name1, year, month;
+
+-- 创建月度犯罪统计结果表
+CREATE TABLE monthly_crime_stats AS
+WITH monthly_crime AS (
+    SELECT 
+        year, 
+        month, 
+        city, 
+        COUNT(*) as crime_count,
+        ROW_NUMBER() OVER(PARTITION BY year, month ORDER BY COUNT(*) DESC) as rank
+    FROM crime_incidents
+    WHERE year = 2023
+    GROUP BY year, month, city
+)
+SELECT year, month, city, crime_count, rank
+FROM monthly_crime
+WHERE rank <= 5;
+```
+
+### 步骤2：使用Hive的INSERT OVERWRITE DIRECTORY导出数据
+
+```sql
+-- 导出数据到HDFS目录
+INSERT OVERWRITE DIRECTORY '/user/hadoop/city_crime_stats' 
+ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' 
+STORED AS TEXTFILE
+SELECT * FROM city_crime_stats;
+```
+
+### 步骤3：使用MySQL的LOAD DATA命令导入数据
+
+```bash
+# 将HDFS上的文件下载到本地
+hdfs dfs -get /user/hadoop/city_crime_stats/part-* /tmp/
+
+# 将文件合并
+cat /tmp/part-* > /tmp/city_crime_stats.csv
+
+# 在MySQL中导入数据
+mysql -u root -p crime_analysis << EOF
+LOAD DATA LOCAL INFILE '/tmp/city_crime_stats.csv' 
+INTO TABLE city_crime_statistics 
+FIELDS TERMINATED BY ',' 
+LINES TERMINATED BY '\n' 
+(city, crime_name, crime_count, avg_victims, max_victims, year, month);
+EOF
+```
+
+## 方法3：使用Hive的JDBC驱动直接连接MySQL
+
+### 步骤1：准备Hive环境
+
+```bash
+# 确保Hive已安装JDBC驱动
+cp mysql-connector-java-x.x.x.jar /path/to/hive/lib/
+```
+
+### 步骤2：在Hive中创建外部表映射到MySQL
+
+```sql
+-- 在Hive中创建外部表，映射到MySQL表
+CREATE EXTERNAL TABLE city_crime_statistics_mysql (
+    city STRING,
+    crime_name STRING,
+    crime_count INT,
+    avg_victims DECIMAL(10,2),
+    max_victims INT,
+    year INT,
+    month INT
+) 
+STORED BY 'org.apache.hadoop.hive.jdbc.storagehandler.JdbcStorageHandler'
+TBLPROPERTIES (
+    "mapred.jdbc.driver.class" = "com.mysql.jdbc.Driver",
+    "mapred.jdbc.url" = "jdbc:mysql://mysql-server:3306/crime_analysis",
+    "mapred.jdbc.username" = "root",
+    "mapred.jdbc.password" = "your_password",
+    "mapred.jdbc.table.name" = "city_crime_statistics",
+    "mapred.jdbc.hive.lazy.split" = "false"
+);
+```
+
+### 步骤3：直接将Hive分析结果插入到MySQL
+
+```sql
+-- 将Hive分析结果插入到MySQL表
+INSERT OVERWRITE TABLE city_crime_statistics_mysql
+SELECT 
+    city, 
+    crime_name1 AS crime_name, 
+    COUNT(*) AS crime_count,
+    AVG(victims) AS avg_victims,
+    MAX(victims) AS max_victims,
+    year,
+    month
+FROM crime_incidents
+WHERE year = 2023 AND month = 12
+GROUP BY city, crime_name1, year, month;
+```
+
+## 方法4：使用Python脚本导出数据
+
+### 创建Python导出脚本
+
+```python
+#!/usr/bin/env python3
+
+import pyhive.sqlalchemy
+import sqlalchemy
+import pandas as pd
+
+# Hive连接配置
+hive_engine = sqlalchemy.create_engine('hive://hive-server:10000/crime_analysis')
+
+# MySQL连接配置
+mysql_engine = sqlalchemy.create_engine('mysql+pymysql://root:your_password@mysql-server:3306/crime_analysis')
+
+# 从Hive读取分析结果
+def export_city_crime_stats():
+    print("导出城市犯罪统计数据...")
+    query = """
+    SELECT 
+        city, 
+        crime_name1 AS crime_name, 
+        COUNT(*) AS crime_count,
+        AVG(victims) AS avg_victims,
+        MAX(victims) AS max_victims,
+        year,
+        month
+    FROM crime_incidents
+    WHERE year = 2023 AND month = 12
+    GROUP BY city, crime_name1, year, month
+    """
+    
+    df = pd.read_sql(query, hive_engine)
+    df.to_sql('city_crime_statistics', mysql_engine, if_exists='replace', index=False, chunksize=1000)
+    print(f"成功导出 {len(df)} 条城市犯罪统计记录")
+
+# 导出月度犯罪统计数据
+def export_monthly_crime_stats():
+    print("导出月度犯罪统计数据...")
+    query = """
+    WITH monthly_crime AS (
+        SELECT 
+            year, 
+            month, 
+            city, 
+            COUNT(*) as crime_count,
+            ROW_NUMBER() OVER(PARTITION BY year, month ORDER BY COUNT(*) DESC) as rank
+        FROM crime_incidents
+        WHERE year = 2023
+        GROUP BY year, month, city
+    )
+    SELECT year, month, city, crime_count, rank
+    FROM monthly_crime
+    WHERE rank <= 5
+    """
+    
+    df = pd.read_sql(query, hive_engine)
+    df.to_sql('monthly_crime_top_cities', mysql_engine, if_exists='replace', index=False, chunksize=1000)
+    print(f"成功导出 {len(df)} 条月度犯罪统计记录")
+
+# 主函数
+if __name__ == "__main__":
+    export_city_crime_stats()
+    export_monthly_crime_stats()
+    print("所有数据导出完成！")
+```
+
+### 运行Python脚本
+
+```bash
+# 安装必要的Python库
+pip install pandas sqlalchemy pyhive pymysql
+
+# 运行脚本
+python export_hive_to_mysql.py
+```
+
+## 注意事项
+
+1. **权限问题**：
+   - 确保Sqoop有访问HDFS和MySQL的权限
+   - 确保MySQL用户有足够的权限（SELECT, INSERT, UPDATE等）
+
+2. **数据类型映射**：
+   - 注意Hive和MySQL之间的数据类型差异
+   - 特别是日期、小数和字符串类型的转换
+
+3. **性能优化**：
+   - 对于大数据集，使用Sqoop的`--batch`参数提高性能
+   - 使用`--split-by`参数进行并行导出
+   - 考虑在非高峰时段导出数据
+
+4. **错误处理**：
+   - 导出前备份MySQL表数据
+   - 检查Hive和MySQL的日志文件以排查错误
+   - 使用`--verbose`参数获取详细的Sqoop导出信息
+
+5. **网络连接**：
+   - 确保Hadoop集群和MySQL服务器之间网络连通
+   - 检查防火墙设置，确保端口3306（MySQL）和相关Hadoop端口开放
+
+## 常见问题及解决方案
+
+1. **Sqoop连接MySQL失败**：
+   - 检查MySQL服务器地址和端口是否正确
+   - 检查MySQL用户名和密码是否正确
+   - 确保MySQL允许远程连接（修改my.cnf中的bind-address）
+
+2. **数据类型不匹配**：
+   - 检查Hive和MySQL表的字段类型是否匹配
+   - 使用Sqoop的`--map-column-hive`和`--map-column-java`参数进行映射
+
+3. **导出速度慢**：
+   - 增加Sqoop的并行度（`-m`参数）
+   - 确保MySQL服务器有足够的资源
+   - 考虑使用临时表批量导入
+
+4. **数据重复**：
+   - 使用`INSERT OVERWRITE`而不是`INSERT INTO`
+   - 在MySQL表中设置合适的主键约束
+   - 导出前清理目标表数据

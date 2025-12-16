@@ -1,0 +1,87 @@
+# 自定义Hive函数：CrimeSeverityUDF
+
+## 功能说明
+该函数用于根据犯罪类型名称判断犯罪的严重程度，返回值为：
+- SEVERE（严重犯罪）
+- MODERATE（中等严重犯罪）
+- MINOR（轻微犯罪）
+- UNKNOWN（未知类型）
+
+## 编译步骤
+
+### 1. 准备编译环境
+确保已安装Java JDK和Hadoop、Hive环境
+
+### 2. 编译Java代码
+```bash
+# 编译Java文件，生成class文件
+javac -cp "$(hadoop classpath):$(hive classpath)" CrimeSeverityUDF.java
+
+# 打包成JAR文件
+jar -cf CrimeSeverityUDF.jar CrimeSeverityUDF.class
+```
+
+## 在Hive中使用自定义函数
+
+### 1. 加载JAR文件
+```sql
+-- 在Hive Shell中加载JAR文件
+ADD JAR /path/to/CrimeSeverityUDF.jar;
+```
+
+### 2. 创建临时函数
+```sql
+-- 创建临时函数（仅在当前会话有效）
+CREATE TEMPORARY FUNCTION crime_severity AS 'CrimeSeverityUDF';
+```
+
+### 3. 使用自定义函数
+```sql
+-- 示例1：直接使用函数
+SELECT crime_name1, crime_severity(crime_name1) as severity FROM crime_incidents LIMIT 10;
+
+-- 示例2：结合分组统计不同严重程度的犯罪数量
+SELECT 
+    crime_severity(crime_name1) as severity,
+    COUNT(*) as crime_count,
+    AVG(victims) as avg_victims
+FROM crime_incidents
+WHERE year = 2023
+GROUP BY crime_severity(crime_name1)
+ORDER BY crime_count DESC;
+
+-- 示例3：分析不同城市的犯罪严重程度分布
+SELECT 
+    city,
+    crime_severity(crime_name1) as severity,
+    COUNT(*) as crime_count
+FROM crime_incidents
+WHERE year = 2023 AND city IS NOT NULL
+GROUP BY city, crime_severity(crime_name1)
+ORDER BY city, crime_count DESC;
+```
+
+### 4. （可选）创建永久函数
+```sql
+-- 创建永久函数（需要指定JAR文件的HDFS路径）
+CREATE FUNCTION crime_analysis.crime_severity AS 'CrimeSeverityUDF'
+USING JAR 'hdfs:///user/hadoop/jars/CrimeSeverityUDF.jar';
+```
+
+## 函数使用示例结果
+
+| crime_name1 | severity |
+|-------------|----------|
+| HOMICIDE    | SEVERE   |
+| ROBBERY     | SEVERE   |
+| LARCENY     | MODERATE |
+| TRAFFIC VIOLATION | MINOR |
+| DRUG POSSESSION | MODERATE |
+
+## 注意事项
+
+1. 确保JAR文件路径正确
+2. 临时函数仅在当前Hive会话中有效，重启Hive后需要重新加载
+3. 永久函数需要将JAR文件上传到HDFS，并确保Hive有权限访问
+4. 函数对输入的犯罪类型名称不区分大小写
+5. 如果输入为NULL，函数返回UNKNOWN

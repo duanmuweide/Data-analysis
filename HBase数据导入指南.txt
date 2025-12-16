@@ -1,0 +1,244 @@
+# HBase数据导入指南
+
+## 方法1：使用HBase Shell手动导入数据
+
+### 步骤1：准备数据文件
+
+1. 将清洗后的CSV文件上传到Hadoop集群
+2. 使用Hive或Linux命令将数据转换为适合HBase导入的格式
+
+```bash
+# 示例：使用Hive创建准备导入HBase的数据表
+CREATE TABLE crime_hbase_import (
+    rowkey STRING,
+    incident_incident_id STRING,
+    incident_offence_code STRING,
+    incident_cr_number STRING,
+    incident_nibrs_code STRING,
+    incident_victims INT,
+    incident_crime_name1 STRING,
+    incident_crime_name2 STRING,
+    incident_crime_name3 STRING,
+    time_dispatch_time STRING,
+    time_start_time STRING,
+    time_end_time STRING,
+    location_block_address STRING,
+    location_city STRING,
+    location_state STRING,
+    location_zip_code STRING,
+    location_latitude STRING,
+    location_longitude STRING,
+    location_address_num STRING,
+    location_street_prefix STRING,
+    location_street_name STRING,
+    location_street_suffix STRING,
+    location_street_type STRING,
+    police_police_district STRING,
+    police_agency STRING,
+    police_place STRING,
+    police_sector STRING,
+    police_beat STRING,
+    police_pra STRING,
+    police_district_num STRING
+) ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t';
+
+# 插入数据，生成rowkey
+INSERT INTO TABLE crime_hbase_import
+SELECT 
+    CONCAT(city, ':', DATE_FORMAT(dispatch_time, 'yyyy-MM-dd'), ':', incident_id) as rowkey,
+    incident_id,
+    offence_code,
+    cr_number,
+    nibrs_code,
+    victims,
+    crime_name1,
+    crime_name2,
+    crime_name3,
+    DATE_FORMAT(dispatch_time, 'yyyy-MM-dd HH:mm:ss'),
+    DATE_FORMAT(start_time, 'yyyy-MM-dd HH:mm:ss'),
+    DATE_FORMAT(end_time, 'yyyy-MM-dd HH:mm:ss'),
+    block_address,
+    city,
+    state,
+    zip_code,
+    CAST(latitude AS STRING),
+    CAST(longitude AS STRING),
+    address_num,
+    street_prefix,
+    street_name,
+    street_suffix,
+    street_type,
+    police_district,
+    agency,
+    place,
+    sector,
+    beat,
+    pra,
+    district_num
+FROM crime_incidents;
+
+# 将数据导出为文本文件
+INSERT OVERWRITE LOCAL DIRECTORY '/tmp/crime_hbase_data'
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t'
+SELECT * FROM crime_hbase_import;
+```
+
+### 步骤2：使用HBase Import工具导入数据
+
+```bash
+# 将本地文件上传到HDFS
+hdfs dfs -put /tmp/crime_hbase_data /user/hadoop/
+
+# 使用HBase Import工具导入数据
+hbase org.apache.hadoop.hbase.mapreduce.Import crime_data_hbase /user/hadoop/crime_hbase_data
+```
+
+## 方法2：使用Hive-HBase集成导入数据
+
+### 步骤1：创建Hive-HBase集成表
+
+```sql
+-- 启用HBase存储处理程序
+ADD JAR /path/to/hbase-hive-handler.jar;
+ADD JAR /path/to/hbase-client.jar;
+ADD JAR /path/to/hbase-common.jar;
+ADD JAR /path/to/hbase-server.jar;
+ADD JAR /path/to/zookeeper.jar;
+
+-- 创建Hive外部表，映射到HBase
+CREATE EXTERNAL TABLE crime_hbase_hive (
+    rowkey STRING,
+    incident_id STRING,
+    offence_code STRING,
+    cr_number STRING,
+    nibrs_code STRING,
+    victims INT,
+    crime_name1 STRING,
+    crime_name2 STRING,
+    crime_name3 STRING,
+    dispatch_time STRING,
+    start_time STRING,
+    end_time STRING,
+    block_address STRING,
+    city STRING,
+    state STRING,
+    zip_code STRING,
+    latitude STRING,
+    longitude STRING,
+    address_num STRING,
+    street_prefix STRING,
+    street_name STRING,
+    street_suffix STRING,
+    street_type STRING,
+    police_district STRING,
+    agency STRING,
+    place STRING,
+    sector STRING,
+    beat STRING,
+    pra STRING,
+    district_num STRING
+)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES (
+    "hbase.columns.mapping" = ":key,incident:incident_id,incident:offence_code,incident:cr_number,incident:nibrs_code,incident:victims,incident:crime_name1,incident:crime_name2,incident:crime_name3,time:dispatch_time,time:start_time,time:end_time,location:block_address,location:city,location:state,location:zip_code,location:latitude,location:longitude,location:address_num,location:street_prefix,location:street_name,location:street_suffix,location:street_type,police:police_district,police:agency,police:place,police:sector,police:beat,police:pra,police:district_num"
+)
+TBLPROPERTIES (
+    "hbase.table.name" = "crime_data_hbase"
+);
+```
+
+### 步骤2：从Hive表导入数据到HBase
+
+```sql
+-- 将数据从Hive内部表导入到HBase集成表
+INSERT INTO TABLE crime_hbase_hive
+SELECT 
+    CONCAT(city, ':', DATE_FORMAT(dispatch_time, 'yyyy-MM-dd'), ':', incident_id) as rowkey,
+    incident_id,
+    offence_code,
+    cr_number,
+    nibrs_code,
+    victims,
+    crime_name1,
+    crime_name2,
+    crime_name3,
+    DATE_FORMAT(dispatch_time, 'yyyy-MM-dd HH:mm:ss'),
+    DATE_FORMAT(start_time, 'yyyy-MM-dd HH:mm:ss'),
+    DATE_FORMAT(end_time, 'yyyy-MM-dd HH:mm:ss'),
+    block_address,
+    city,
+    state,
+    zip_code,
+    CAST(latitude AS STRING),
+    CAST(longitude AS STRING),
+    address_num,
+    street_prefix,
+    street_name,
+    street_suffix,
+    street_type,
+    police_district,
+    agency,
+    place,
+    sector,
+    beat,
+    pra,
+    district_num
+FROM crime_incidents;
+```
+
+## 方法3：使用HBase Shell的put命令（适合少量数据）
+
+```bash
+# 登录HBase Shell
+hbase shell
+
+# 使用put命令逐个插入数据（示例）
+put 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567', 'incident:incident_id', '1234567'
+put 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567', 'incident:offence_code', '01A'
+put 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567', 'time:dispatch_time', '2023-12-09 14:30:00'
+put 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567', 'location:city', 'BALTIMORE'
+put 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567', 'police:police_district', 'CENTRAL'
+
+# 验证数据插入
+get 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567'
+```
+
+## 验证数据导入
+
+```bash
+# 登录HBase Shell
+hbase shell
+
+# 验证表是否存在
+list
+
+# 查看表结构
+describe 'crime_data_hbase'
+
+# 扫描表数据（示例）
+scan 'crime_data_hbase', {LIMIT => 10}
+
+# 按RowKey查询
+get 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567'
+
+# 按城市查询（示例）
+scan 'crime_data_hbase', {ROWPREFIXFILTER => 'BALTIMORE:', LIMIT => 10}
+```
+
+## 常见问题及解决方案
+
+1. **导入速度慢**：
+   - 使用批量导入工具（Import）代替单个put命令
+   - 增加HBase集群的RegionServer数量
+   - 调整HBase的写入缓冲区大小
+
+2. **数据导入失败**：
+   - 检查HBase表是否已创建
+   - 检查RowKey格式是否正确
+   - 检查Hive-HBase集成的列映射是否正确
+   - 查看HBase和Hive的日志文件以获取详细错误信息
+
+3. **数据热点问题**：
+   - 确保RowKey设计合理，避免单调递增的前缀
+   - 使用随机前缀或哈希值分散数据
+   - 预拆分表以均衡负载
