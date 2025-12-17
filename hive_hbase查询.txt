@@ -61,6 +61,7 @@ CREATE TEMPORARY FUNCTION calc_corr_aux AS 'com.qdu.CorrCoefficientUDF';
 -- 统计不同面积等级流域的磷污染（肥料、废弃物、点源）占比
 -- 简化版：统计不同面积等级流域的磷污染来源占比
 SELECT 
+   	id,  -- 手动传入的批次ID
     CASE 
         WHEN area_sqkm < 1000 THEN '小型流域(<1000km²)'
         WHEN area_sqkm BETWEEN 1000 AND 5000 THEN '中型流域(1000-5000km²)'
@@ -74,12 +75,14 @@ SELECT
     ROUND(SUM(p_manure_kgsqkm) / SUM(p_farm_fert_kgsqkm + p_manure_kgsqkm + p_point_source_kgsqkm) * 100, 2) AS manure_ratio,
     ROUND(SUM(p_point_source_kgsqkm) / SUM(p_farm_fert_kgsqkm + p_manure_kgsqkm + p_point_source_kgsqkm) * 100, 2) AS point_source_ratio
 FROM watershed_nutrient_balance
-WHERE year BETWEEN 2010 AND 2020
+WHERE id = 1  -- WHERE条件中使用传入的ID
+AND year BETWEEN 2010 AND 2020
 AND p_farm_fert_kgsqkm IS NOT NULL
 AND p_manure_kgsqkm IS NOT NULL
 AND p_point_source_kgsqkm IS NOT NULL
 AND area_sqkm > 0
 GROUP BY 
+    id ,  -- 必须添加到GROUP BY中
     CASE 
         WHEN area_sqkm < 1000 THEN '小型流域(<1000km²)'
         WHEN area_sqkm BETWEEN 1000 AND 5000 THEN '中型流域(1000-5000km²)'
@@ -87,7 +90,7 @@ GROUP BY
     END
 ORDER BY basin_count DESC;
 
-查询结果
+查询结果（全部）
 不同面积流域的污染来源结构差异显著
 流域类型	农业肥料占比	牲畜粪便占比	点源污染占比	主要污染源
 小型流域	37.41%	46.90%	15.69%	牲畜粪便为主
