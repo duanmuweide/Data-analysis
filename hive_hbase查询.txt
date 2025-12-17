@@ -114,39 +114,42 @@ ORDER BY basin_count DESC;
 
 分析 4：分析历史氮盈余与当前氮排放的相关性（更科学）
 -- 分析历史氮盈余与当前氮排放的相关性（更科学）
-WITH cumulative_data AS (
-    SELECT 
-        FIPS,
-        SUM(n_leg_ag_surplus_kgsqkm) as cumulative_surplus,
-        AVG(n_leg_ag_surplus_kgsqkm) as avg_annual_surplus
-    FROM watershed_nutrient_balance
-    WHERE year BETWEEN 1950 AND 2000
-    GROUP BY FIPS
-),
-emission_data AS (
-    SELECT 
-        FIPS,
-        AVG(n_emis_total_kgsqkm) as avg_annual_emission
-    FROM watershed_nutrient_balance
-    WHERE year >= 2001
-    GROUP BY FIPS
-)
 SELECT 
+    c.id,  -- 批次ID（从盈余子查询c中获取，与排放子查询e的id一致）
     c.FIPS,
     c.cumulative_surplus,
     c.avg_annual_surplus,
     e.avg_annual_emission,
-    -- 计算盈余-排放比：每单位盈余产生多少排放
+    -- 保留原计算逻辑，NULLIF避免除零错误
     ROUND(e.avg_annual_emission / NULLIF(c.avg_annual_surplus, 0), 3) as emission_per_surplus_ratio,
-    -- 分级
     CASE 
         WHEN e.avg_annual_emission > 2000 THEN '严重排放'
         WHEN e.avg_annual_emission > 1000 THEN '高排放'
         WHEN e.avg_annual_emission > 500 THEN '中排放'
         ELSE '低排放'
     END as emission_level
-FROM cumulative_data c
-JOIN emission_data e ON c.FIPS = e.FIPS
+FROM (
+    SELECT 
+        id,  -- 子查询新增：批次ID
+        FIPS,
+        SUM(n_leg_ag_surplus_kgsqkm) as cumulative_surplus,
+        AVG(n_leg_ag_surplus_kgsqkm) as avg_annual_surplus
+    FROM watershed_nutrient_balance
+    WHERE id = 1  -- 手动替换为目标批次ID
+    AND year BETWEEN 1950 AND 2000
+    GROUP BY id, FIPS  -- GROUP BY新增id（非聚合列必须包含）
+) c
+JOIN (
+    SELECT 
+        id,  -- 子查询新增：批次ID
+        FIPS,
+        AVG(n_emis_total_kgsqkm) as avg_annual_emission
+    FROM watershed_nutrient_balance
+    WHERE id = 1  -- 手动替换为目标批次ID
+    AND year >= 2001
+    GROUP BY id, FIPS  -- GROUP BY新增id（非聚合列必须包含）
+) e 
+ON c.FIPS = e.FIPS AND c.id = e.id  -- 关联条件新增id对齐（确保同一批次的FIPS关联）
 WHERE c.cumulative_surplus > 0
 ORDER BY emission_per_surplus_ratio DESC
 LIMIT 50;
