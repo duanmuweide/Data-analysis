@@ -1,6 +1,7 @@
 分析 1：各年份农业氮磷利用效率 Top10 流域（分区 + 分组 + 子查询 + 内置函数）
--- 各年份农业氮磷利用效率 Top10 流域（过滤异常值版）(2000年以后包含2000年)
+-- 各年份农业氮磷利用效率 Top10 流域（过滤异常值版）(2000年以后包含2000年 按批次查询，包含id列)
 SELECT 
+    id,  -- 新增：批次ID
     year,
     FIPS,
     ROUND(n_nue_kgsqkm, 3) as n_efficiency,
@@ -9,6 +10,7 @@ SELECT
     rank
 FROM (
     SELECT 
+        id,  -- 新增：批次ID
         year,
         FIPS,
         n_nue_kgsqkm,
@@ -18,7 +20,8 @@ FROM (
             ORDER BY (n_nue_kgsqkm + p_nue_kgsqkm) / 2 DESC
         ) as rank
     FROM watershed_nutrient_balance
-    WHERE year >= 2000
+    WHERE id = 1  -- 动态传入批次ID
+    AND year >= 2000
     AND n_nue_kgsqkm IS NOT NULL
     AND p_nue_kgsqkm IS NOT NULL
     -- 过滤异常值：效率应该在0-1之间
