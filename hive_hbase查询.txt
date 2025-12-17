@@ -175,31 +175,35 @@ LIMIT 50;
 
 
 分析 5：人类活动对流域氮平衡的影响程度排名（分组 + 子查询 + 内置函数 + 聚合）
--- 简化版：人类活动影响排名
+-- 简化版：人类活动影响排名(Top20)
 SELECT 
+    id,  -- 批次ID（子查询已包含，可正常引用）
     year,
     FIPS,
     human_impact_score,
     impact_rank
 FROM (
     SELECT 
+        id,  -- 子查询新增：批次ID（关键修复）
         year,
         FIPS,
-        -- 直接计算人类活动影响（去掉窗口函数中的MAX）
+        -- 保留原人类活动影响得分计算逻辑
         ROUND(
             (COALESCE(n_human_food_dem_kgsqkm, 0) / 100) * 30 +
             (COALESCE(p_human_nonfood_dem_kgsqkm, 0) / 50) * 25 +
             (COALESCE(n_human_food_waste_kgsqkm, 0) / 80) * 45,
             2
         ) AS human_impact_score,
+        -- 保留原排名逻辑
         RANK() OVER (PARTITION BY year ORDER BY 
             (COALESCE(n_human_food_dem_kgsqkm, 0) / 100) * 30 +
             (COALESCE(p_human_nonfood_dem_kgsqkm, 0) / 50) * 25 +
             (COALESCE(n_human_food_waste_kgsqkm, 0) / 80) * 45 DESC
         ) AS impact_rank
     FROM watershed_nutrient_balance
-    WHERE year >= 2015 
-      AND pmod(hash(FIPS), 8) BETWEEN 6 AND 8
+    WHERE id = 1  -- 按批次过滤（手动替换为目标ID）
+      AND year >= 2015 
+      AND pmod(hash(FIPS), 8) BETWEEN 6 AND 8  -- 抽样条件（注意：8取模结果范围是0-7，6-8实际仅6-7生效）
       AND n_human_food_dem_kgsqkm IS NOT NULL
 ) ranked
 WHERE impact_rank <= 20
