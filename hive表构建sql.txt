@@ -6,9 +6,8 @@ SET hive.exec.dynamic.partition.mode=nonstrict;
 SET hive.exec.max.dynamic.partitions.pernode=1000;
 
 DROP table watershed_nutrient_balance ;
-
--- 创建分区+分桶表（按year分区，按FIPS分桶，适配53个字段）
-CREATE TABLE IF NOT EXISTS watershed_nutrient_balance ( -- 52个字段 加上year正好53
+-- 创建分区+分桶表（按id和year分区，按FIPS分桶，适配53个字段）
+CREATE TABLE IF NOT EXISTS watershed_nutrient_balance (
     FIPS INT COMMENT '流域标识编码',
     area_sqkm DOUBLE COMMENT '流域面积(km²)',
     n_farm_fert_kgsqkm DOUBLE COMMENT '农业氮肥料投入（kg N/km²）',
@@ -62,19 +61,18 @@ CREATE TABLE IF NOT EXISTS watershed_nutrient_balance ( -- 52个字段 加上yea
     n_nue_kgsqkm DOUBLE COMMENT '农业氮利用效率（无单位）',
     p_nue_kgsqkm DOUBLE COMMENT '农业磷利用效率（无单位）'
 )
--- 按year分区（符合项目分区要求，便于按年份查询分析）
-PARTITIONED BY (year INT COMMENT '统计年份')
--- 按FIPS分桶（8个桶，避免数据倾斜，符合分桶要求）
+PARTITIONED BY (
+    id INT COMMENT '数据批次标识（每次上传递增1）',
+    year INT COMMENT '统计年份（从数据中提取）'
+)
 CLUSTERED BY (FIPS) INTO 8 BUCKETS
--- 存储格式（适配CSV数据，支持快速导入）
 ROW FORMAT DELIMITED
 FIELDS TERMINATED BY ','
 LINES TERMINATED BY '\n'
-STORED AS TEXTFILE
---TBLPROPERTIES ('skip.header.line.count'='1'); -- 跳过CSV文件第一行表头
+STORED AS TEXTFILE;
+
 
 DROP table data_tmp ;
-
 -- 创建一个外部临时表 用于后续进行动态分区插入
 CREATE TABLE IF NOT EXISTS data_tmp( 
     FIPS int COMMENT '流域标识编码',
@@ -135,73 +133,9 @@ ROW FORMAT DELIMITED
 FIELDS TERMINATED BY ','
 LINES TERMINATED BY '\n'
 STORED AS TEXTFILE
-TBLPROPERTIES ('skip.header.line.count'='1'); -- 跳过CSV文件第一行表头
-
-load data local inpath '/home/master/CleanedCountyNNIkgsqkm.csv' into table data_tmp ;
-
-SELECT * FROM data_tmp LIMIT 5;
-
--- 从HDFS的临时表导入数据到Hive表（自动识别year分区）
-INSERT OVERWRITE TABLE watershed_nutrient_balance
-PARTITION (year)
-SELECT 
-    FIPS,
-    area_sqkm,
-    n_farm_fert_kgsqkm,
-    p_farm_fert_kgsqkm,
-    n_nonfarm_fert_kgsqkm,
-    p_nonfarm_fert_kgsqkm,
-    n_total_fert_kgsqkm,
-    p_total_fert_kgsqkm,
-    n_manure_kgsqkm,
-    p_manure_kgsqkm,
-    n_livestock_dem_kgsqkm,
-    p_livestock_dem_kgsqkm,
-    n_livestock_prod_kgsqkm,
-    p_livestock_prod_kgsqkm,
-    n_livestock_rec_kgsqkm,
-    p_livestock_rec_kgsqkm,
-    n_crop_rem_kgsqkm,
-    p_crop_rem_kgsqkm,
-    n_pasture_rem_kgsqkm,
-    p_pasture_rem_kgsqkm,
-    n_crop_fix_kgsqkm,
-    n_human_food_dem_kgsqkm,
-    p_human_food_dem_kgsqkm,
-    n_human_food_waste_kgsqkm,
-    p_human_food_waste_kgsqkm,
-    p_human_nonfood_dem_kgsqkm,
-    p_human_nonfood_waste_kgsqkm,
-    p_human_total_dem_kgsqkm,
-    p_human_total_waste_kgsqkm,
-    n_point_source_kgsqkm,
-    p_point_source_kgsqkm,
-    n_atm_dep_kgsqkm,
-    p_atm_dep_kgsqkm,
-    n_nat_fix_kgsqkm,
-    n_rock_kgsqkm,
-    n_emis_total_kgsqkm,
-    n_emis_ag_kgsqkm,
-    n_emis_fire_kgsqkm,
-    n_emis_lightning_kgsqkm,
-    n_emis_nonpoint_kgsqkm,
-    n_emis_point_kgsqkm,
-    n_emis_transport_kgsqkm,
-    n_ag_n2o_kgsqkm,
-    n_ag_n2_kgsqkm,
-    n_terr_surplus_kgsqkm,
-    p_terr_surplus_kgsqkm,
-    n_ag_surplus_kgsqkm,
-    p_ag_surplus_kgsqkm,
-    n_leg_ag_surplus_kgsqkm,
-    p_leg_ag_surplus_kgsqkm,
-    n_nue_kgsqkm,
-    p_nue_kgsqkm,
-    year -- 最后一列对应分区字段
-FROM
-    data_tmp ;
+TBLPROPERTIES ('skip.header.line.count'='1');
 
 -- 验证导入结果（查询前10条数据）
 SELECT * FROM watershed_nutrient_balance LIMIT 5;
-
+SELECT COUNT(*) FROM watershed_nutrient_balance ; 共211344条数据
 DESCRIBE watershed_nutrient_balance;
