@@ -1,0 +1,46 @@
+hbase这样构建数据：利用hive和hbase的集成，以hql的形式将指定id列的数据集插入hbase
+
+！待修改!
+具体过程：
+# 创建命名空间（若不存在）
+create_namespace 'watershed_hbase'
+# 创建表：列族cf_basic（基础信息）、cf_surplus（盈余数据）
+create 'watershed_hbase.nutrient_surplus', 'cf_basic', 'cf_surplus'
+
+在 DBeaver 的 Hive 编辑器中执行以下 SQL，创建 Hive 外部表映射到上述 HBase 表：
+CREATE EXTERNAL TABLE hive_hbase_nutrient_surplus (
+    rowkey STRING,  -- 对应HBase的RowKey（反转FIPS+_+4位年份）
+    id INT,         -- 批次ID（你要筛选的特定ID）
+    fips STRING,    -- 流域编码
+    year INT,       -- 年份
+    n_ag_surplus_kgsqkm DOUBLE,  -- 氮盈余
+    p_ag_surplus_kgsqkm DOUBLE   -- 磷盈余
+)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES (
+    "hbase.columns.mapping" = ":key,cf_basic:id,cf_basic:fips,cf_basic:year,cf_surplus:n_ag_surplus_kgsqkm,cf_surplus:p_ag_surplus_kgsqkm"
+)
+TBLPROPERTIES (
+    "hbase.table.name" = "watershed_hbase.nutrient_surplus",  -- 关联的HBase表名
+    "hbase.zookeeper.quorum" = "master-pc",                   -- HBase的ZK地址
+    "hbase.zookeeper.property.clientPort" = "2181"            -- ZK端口
+);
+
+
+TRUNCATE TABLE hive_hbase_nutrient_surplus;  清空旧数据
+
+INSERT OVERWRITE TABLE hive_hbase_nutrient_surplus 插入新数据
+SELECT
+    CONCAT(REVERSE(fips), '_', LPAD(CAST(year AS STRING), 4, '0')) AS rowkey,
+    4 AS id,  -- 新批次ID（手动指定或从变量获取）
+    fips,
+    year,
+    n_ag_surplus_kgsqkm,
+    p_ag_surplus_kgsqkm
+FROM
+    watershed_nutrient_balance
+WHERE
+    id = 4  -- 筛选新批次ID的数据集
+    AND year BETWEEN 2010 AND 2020;
+
+

@@ -228,38 +228,7 @@ RowKey 格式：reverse(FIPS)_year（例如 FIPS=10001、year=2020 → RowKey=10
 反转 FIPS 字段，使相同前缀的 FIPS 分散存储，避免单一 Region 热点。
 拼接 year 字段，保证同流域不同年份的数据连续存储，提升查询效率。
 符合 HBase RowKey 字典序排序特性，支持按流域 + 年份范围查询。
-
-HBase 分析场景：查询特定流域多年氮磷盈余变化趋势
-// 核心查询逻辑（Java代码示例，可整合到Web系统）
-Configuration conf = HBaseConfiguration.create();
-try (Connection conn = ConnectionFactory.createConnection(conf);
-     Table table = conn.getTable(TableName.valueOf("watershed_hbase.nutrient_surplus"))) {
-    // 1. 构建查询条件：查询FIPS=10001（反转后为10001）2010-2020年数据
-    Scan scan = new Scan();
-    // 起始RowKey：10001_2010，结束RowKey：10001_2020
-    scan.withStartRow(Bytes.toBytes("10001_2010"));
-    scan.withStopRow(Bytes.toBytes("10001_2020"));
     
-    // 2. 只查询需要的列（减少数据传输）
-    scan.addColumn(Bytes.toBytes("cf_basic"), Bytes.toBytes("year"));
-    scan.addColumn(Bytes.toBytes("cf_surplus"), Bytes.toBytes("n_ag_surplus_kgsqkm"));
-    scan.addColumn(Bytes.toBytes("cf_surplus"), Bytes.toBytes("p_ag_surplus_kgsqkm"));
-    
-    // 3. 执行查询并处理结果
-    ResultScanner scanner = table.getScanner(scan);
-    for (Result result : scanner) {
-        String rowKey = Bytes.toString(result.getRow());
-        int year = Bytes.toInt(result.getValue(Bytes.toBytes("cf_basic"), Bytes.toBytes("year")));
-        double nSurplus = Bytes.toDouble(result.getValue(Bytes.toBytes("cf_surplus"), Bytes.toBytes("n_ag_surplus_kgsqkm")));
-        double pSurplus = Bytes.toDouble(result.getValue(Bytes.toBytes("cf_surplus"), Bytes.toBytes("p_ag_surplus_kgsqkm")));
-        
-        // 4. 输出结果（后续可导入MySQL用于可视化）
-        System.out.printf("年份：%d，氮盈余：%.2f，磷盈余：%.2f%n", year, nSurplus, pSurplus);
-    }
-} catch (IOException e) {
-    e.printStackTrace();
-}
-
 核心要求适配说明
 Hive 语法要求：5 种 HQL 均包含分组、子查询、分区、分桶、表连接、聚合、内置函数，且第 1种包含自定义函数。
 逻辑唯一性：5 种分析分别聚焦 “效率排名”“相关性分析”“污染占比”“历史累积影响”“人类活动影响”，无逻辑重复。
