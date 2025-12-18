@@ -1,68 +1,67 @@
-package com.qdu;
+package com.qdu.service;
+
+import com.qdu.connection.HiveConnUtil;
+import com.qdu.connection.MysqlConnUtil;
+import com.qdu.connection.tool.HiveMaxIdQueryUtil;
 
 import java.sql.*;
-import java.util.Properties;
 
 /**
  * 分析历史氮盈余与当前氮排放的相关性
- * 连接配置：master-pc:10000/data_analysis，用户名master，密码为空
- * 结果导入MySQL：american_data_analysis数据库
+ * 复用统一连接工具类，仅处理最新批次（maxId）数据
+ * 结果导入MySQL：american_data_analysis数据库（新增hid列存储批次ID）
  */
 public class NitrogenSurplusEmissionAnalysis {
-  // 固定Hive连接配置
-  private static final String HIVE_URL = "jdbc:hive2://master-pc:10000/data_analysis";
-  private static final String HIVE_USER = "master";
-  private static final String HIVE_PASSWORD = ""; // 密码为空
-
-  // MySQL连接配置（适配你的环境）
-  private static final String MYSQL_URL = "jdbc:mysql://localhost:3306/american_data_analysis?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true";
-  private static final String MYSQL_USER = "root";
-  private static final String MYSQL_PASSWORD = "Czm982376"; // 密码为空
-  // MySQL目标表名
+  // 仅保留业务配置，连接配置移到工具类
   private static final String MYSQL_TARGET_TABLE = "nitrogen_surplus_emission_analysis";
+  private static final int BATCH_SIZE = 50; // Top50数据，批量大小设为50
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws SQLException {
     Connection hiveConn = null;
     Connection mysqlConn = null;
     Statement hiveStmt = null;
     PreparedStatement mysqlPstmt = null;
     ResultSet rs = null;
+    int maxId = 0; // 存储最大批次ID
 
     try {
-      // 1. 加载驱动
-      Class.forName("org.apache.hive.jdbc.HiveDriver");
-      Class.forName("com.mysql.cj.jdbc.Driver");
+      // 1. 获取本次上传的最大批次ID（复用工具类）
+      maxId = HiveMaxIdQueryUtil.getMaxId();
+      if (maxId == 0) {
+        System.out.println("Hive表中无数据，程序退出！");
+        return;
+      }
+      System.out.println("本次查询的批次ID：" + maxId);
 
-      // 2. 建立Hive连接
-      Properties hiveProps = new Properties();
-      hiveProps.setProperty("user", HIVE_USER);
-      hiveProps.setProperty("password", HIVE_PASSWORD);
-      hiveConn = DriverManager.getConnection(HIVE_URL, hiveProps);
+      // 2. 获取数据库连接（完全复用工具类，无硬编码配置）
+      hiveConn = HiveConnUtil.getHiveConnection();
+      mysqlConn = MysqlConnUtil.getMysqlConnection();
       hiveStmt = hiveConn.createStatement();
 
-      // 3. 建立MySQL连接
-      mysqlConn = DriverManager.getConnection(MYSQL_URL, MYSQL_USER, MYSQL_PASSWORD);
-      mysqlConn.setAutoCommit(false); // 关闭自动提交，开启批量插入
-
-      // 4. 构建核心SQL（保留原CTE逻辑）
+      // 3. 构建核心SQL（新增id字段 + 动态maxId + 关联id）
       String hiveSql = "WITH cumulative_data AS ( " +
               "    SELECT " +
+              "        id,  " +
               "        FIPS, " +
               "        SUM(n_leg_ag_surplus_kgsqkm) as cumulative_surplus, " +
               "        AVG(n_leg_ag_surplus_kgsqkm) as avg_annual_surplus " +
               "    FROM watershed_nutrient_balance " +
-              "    WHERE year BETWEEN 1950 AND 2000 " +
-              "    GROUP BY FIPS " +
+              "    WHERE id = " + maxId + " " +  // 动态传入最大批次ID
+              "    AND year BETWEEN 1950 AND 2000 " +
+              "    GROUP BY id, FIPS " +  // GROUP BY新增id
               "), " +
               "emission_data AS ( " +
               "    SELECT " +
+              "        id,  " +
               "        FIPS, " +
               "        AVG(n_emis_total_kgsqkm) as avg_annual_emission " +
               "    FROM watershed_nutrient_balance " +
-              "    WHERE year >= 2001 " +
-              "    GROUP BY FIPS " +
+              "    WHERE id = " + maxId + " " +  // 动态传入最大批次ID
+              "    AND year >= 2001 " +
+              "    GROUP BY id, FIPS " +  // GROUP BY新增id
               ") " +
               "SELECT " +
+              "    c.id,  " +
               "    c.FIPS, " +
               "    c.cumulative_surplus, " +
               "    c.avg_annual_surplus, " +
@@ -75,40 +74,42 @@ public class NitrogenSurplusEmissionAnalysis {
               "        ELSE '低排放' " +
               "    END as emission_level " +
               "FROM cumulative_data c " +
-              "JOIN emission_data e ON c.FIPS = e.FIPS " +
+              "JOIN emission_data e ON c.FIPS = e.FIPS AND c.id = e.id " +  // 关联条件新增id
               "WHERE c.cumulative_surplus > 0 " +
               "ORDER BY emission_per_surplus_ratio DESC " +
               "LIMIT 50";
 
-      // 5. 预编译MySQL插入语句（字段无关键字冲突）
+      // 4. 预编译MySQL插入语句（新增hid列，放在最后）
       String mysqlInsertSql = String.format(
               "INSERT INTO %s (fips, cumulative_surplus, avg_annual_surplus, avg_annual_emission, " +
-                      "emission_per_surplus_ratio, emission_level) " +
-                      "VALUES (?, ?, ?, ?, ?, ?)", MYSQL_TARGET_TABLE);
+                      "emission_per_surplus_ratio, emission_level, hid) " +  // 新增hid列
+                      "VALUES (?, ?, ?, ?, ?, ?, ?)", MYSQL_TARGET_TABLE);
       mysqlPstmt = mysqlConn.prepareStatement(mysqlInsertSql);
 
-      // 6. 执行Hive查询
+      // 5. 执行Hive查询
       rs = hiveStmt.executeQuery(hiveSql);
 
-      // 7. 遍历结果集并批量插入MySQL
+      // 6. 遍历结果集并批量插入MySQL（新增hid参数）
       int batchCount = 0;
-      final int BATCH_SIZE = 50; // Top50数据，批量大小设为50即可
       while (rs.next()) {
+        // 读取Hive返回的字段（新增id字段）
+        int hid = rs.getInt("id");  // 批次ID -> MySQL的hid列
         String fips = rs.getString("FIPS");
-        // 限制数值范围，避免超出MySQL DECIMAL(18,3)上限
+        // 限制数值范围，避免超出MySQL DECIMAL(20,3)上限
         double cumulativeSurplus = Math.min(rs.getDouble("cumulative_surplus"), 9999999999999999.999);
         double avgAnnualSurplus = Math.min(rs.getDouble("avg_annual_surplus"), 9999999999999999.999);
         double avgAnnualEmission = Math.min(rs.getDouble("avg_annual_emission"), 9999999999999999.999);
         double emissionRatio = rs.getDouble("emission_per_surplus_ratio");
         String emissionLevel = rs.getString("emission_level");
 
-        // 设置插入参数
+        // 设置插入参数（最后一个参数为hid）
         mysqlPstmt.setString(1, fips);
         mysqlPstmt.setDouble(2, cumulativeSurplus);
         mysqlPstmt.setDouble(3, avgAnnualSurplus);
         mysqlPstmt.setDouble(4, avgAnnualEmission);
         mysqlPstmt.setDouble(5, emissionRatio);
         mysqlPstmt.setString(6, emissionLevel);
+        mysqlPstmt.setInt(7, hid);  // 新增：设置hid参数
 
         // 添加到批处理
         mysqlPstmt.addBatch();
@@ -118,50 +119,27 @@ public class NitrogenSurplusEmissionAnalysis {
       // 执行批量插入（Top50数据一次性提交）
       if (batchCount > 0) {
         mysqlPstmt.executeBatch();
-        mysqlConn.commit();
-        System.out.printf("成功插入 %d 条氮盈余与排放相关性数据到MySQL%n", batchCount);
+        MysqlConnUtil.commit(mysqlConn);  // 复用工具类提交方法
+        System.out.printf("成功插入 %d 条氮盈余与排放相关性数据到MySQL（批次ID：%d）%n", batchCount, maxId);
       } else {
-        System.out.println("Hive查询结果为空，无数据插入");
+        System.out.println("Hive查询结果为空，无数据插入（批次ID：" + maxId + "）");
       }
 
-    } catch (ClassNotFoundException e) {
-      System.err.println("驱动加载失败：" + e.getMessage());
-      e.printStackTrace();
     } catch (SQLException e) {
       System.err.println("数据库操作异常：" + e.getMessage());
       e.printStackTrace();
-      // 事务回滚
-      try {
-        if (mysqlConn != null) {
-          mysqlConn.rollback();
-          System.out.println("MySQL事务已回滚");
-        }
-      } catch (SQLException rollbackEx) {
-        System.err.println("事务回滚失败：" + rollbackEx.getMessage());
-      }
+      // 复用工具类回滚方法
+      MysqlConnUtil.rollback(mysqlConn);
     } finally {
-      // 8. 关闭所有资源
-      closeResources(rs, hiveStmt, hiveConn);
+      // 关闭所有资源（复用工具类关闭方法）
       try {
-        if (mysqlPstmt != null) mysqlPstmt.close();
-        if (mysqlConn != null) mysqlConn.close();
+        if (rs != null) rs.close();
+        HiveConnUtil.closeConnection(hiveConn, hiveStmt);
+        MysqlConnUtil.closeConnection(mysqlConn, mysqlPstmt);
       } catch (SQLException e) {
-        System.err.println("MySQL资源关闭异常：" + e.getMessage());
+        System.err.println("资源关闭异常：" + e.getMessage());
       }
       System.out.println("所有数据库连接已关闭");
-    }
-  }
-
-  /**
-   * 统一关闭JDBC资源
-   */
-  private static void closeResources(ResultSet rs, Statement stmt, Connection conn) {
-    try {
-      if (rs != null) rs.close();
-      if (stmt != null) stmt.close();
-      if (conn != null) conn.close();
-    } catch (SQLException e) {
-      System.err.println("Hive资源关闭异常：" + e.getMessage());
     }
   }
 }
