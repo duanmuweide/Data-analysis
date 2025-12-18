@@ -11,7 +11,7 @@
  Target Server Version : 80021
  File Encoding         : 65001
 
- Date: 08/12/2025 19:53:07
+ Date: 18/12/2025 19:15:38
 */
 
 SET NAMES utf8mb4;
@@ -25,11 +25,12 @@ CREATE TABLE `watershed_efficiency_top10`  (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',
   `year` int NOT NULL,
   `fips` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
-  `n_efficiency` decimal(10, 6) NULL DEFAULT NULL,
-  `p_efficiency` decimal(10, 6) NULL DEFAULT NULL,
-  `avg_efficiency` decimal(10, 6) NULL DEFAULT NULL,
+  `n_efficiency` decimal(20, 6) NOT NULL,
+  `p_efficiency` decimal(20, 6) NOT NULL,
+  `avg_efficiency` decimal(20, 6) NOT NULL,
   `ranks` int NOT NULL,
+  `hid` int NOT NULL,
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 180 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 SET FOREIGN_KEY_CHECKS = 1;
