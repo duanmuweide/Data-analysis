@@ -11,7 +11,7 @@
  Target Server Version : 80021
  File Encoding         : 65001
 
- Date: 08/12/2025 19:51:31
+ Date: 18/12/2025 19:32:15
 */
 
 SET NAMES utf8mb4;
@@ -31,7 +31,8 @@ CREATE TABLE `phosphorus_pollution_by_basin_area`  (
   `farm_fert_ratio` decimal(20, 6) NOT NULL,
   `manure_ratio` decimal(20, 6) NOT NULL,
   `point_source_ratio` decimal(20, 6) NOT NULL,
+  `hid` int NOT NULL,
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 3 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 SET FOREIGN_KEY_CHECKS = 1;
