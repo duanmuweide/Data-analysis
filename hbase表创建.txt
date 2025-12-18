@@ -3,8 +3,8 @@
 # 登录HBase Shell
 hbase shell
 
-# 创建crime_data_hbase表，包含4个列族：incident、time、location、police
-create 'crime_data_hbase', {NAME => 'incident', VERSIONS => 1}, {NAME => 'time', VERSIONS => 1}, {NAME => 'location', VERSIONS => 1}, {NAME => 'police', VERSIONS => 1}
+# 创建crime_data_hbase表，包含5个列族：incident、time、location、police、version
+create 'crime_data_hbase', {NAME => 'incident', VERSIONS => 1}, {NAME => 'time', VERSIONS => 1}, {NAME => 'location', VERSIONS => 1}, {NAME => 'police', VERSIONS => 1}, {NAME => 'version', VERSIONS => 1}
 
 # 查看表结构
 describe 'crime_data_hbase'

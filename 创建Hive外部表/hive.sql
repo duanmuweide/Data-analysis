@@ -1,8 +1,8 @@
--- ´´½¨Êı¾İ¿â
+-- åˆ›å»ºæ•°æ®åº“
 CREATE DATABASE IF NOT EXISTS crime_analysis;
 USE crime_analysis;
 
--- ´´½¨Íâ²¿±í
+-- åˆ›å»ºå¤–éƒ¨è¡¨
 CREATE EXTERNAL TABLE IF NOT EXISTS crime_incidents_external (
     incident_id STRING,
     offence_code STRING,
@@ -33,7 +33,8 @@ CREATE EXTERNAL TABLE IF NOT EXISTS crime_incidents_external (
     latitude DOUBLE,
     longitude DOUBLE,
     district_num STRING,
-    location STRING
+    location STRING,
+    versionid INT
 )
 PARTITIONED BY (year INT, month INT, day INT)
 ROW FORMAT DELIMITED
@@ -41,7 +42,7 @@ FIELDS TERMINATED BY ','
 STORED AS TEXTFILE
 LOCATION '/user/hive/warehouse/crime_data';
 
--- ´´½¨ORC¸ñÊ½µÄÄÚ²¿±í£¨Ìá¸ß²éÑ¯ĞÔÄÜ£©
+-- åˆ›å»ºORCæ ¼å¼çš„å†…éƒ¨è¡¨ä»¥æé«˜æŸ¥è¯¢æ€§èƒ½
 CREATE TABLE crime_incidents (
     incident_id STRING,
     offence_code STRING,
@@ -72,7 +73,8 @@ CREATE TABLE crime_incidents (
     latitude DOUBLE,
     longitude DOUBLE,
     district_num STRING,
-    location STRING
+    location STRING,
+    versionid INT
 )
 PARTITIONED BY (year INT, month INT, day INT)
 CLUSTERED BY (city) INTO 8 BUCKETS

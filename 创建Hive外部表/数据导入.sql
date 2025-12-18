@@ -1,9 +1,9 @@
--- 加载数据到外部表
+-- 鍔犺浇鏁版嵁鍒板閮ㄨ〃
 LOAD DATA INPATH '/user/hadoop/crime_final.csv' 
 OVERWRITE INTO TABLE crime_incidents_external
 PARTITION (year=2023, month=12, day=9);
 
--- 从外部表插入到内部表
+-- 灏嗗閮ㄨ〃鏁版嵁瀵煎叆鍒板唴閮ㄨ〃
 INSERT OVERWRITE TABLE crime_incidents PARTITION(year, month, day)
 SELECT 
     incident_id,
@@ -36,6 +36,7 @@ SELECT
     longitude,
     district_num,
     location,
+    versionid,
     YEAR(dispatch_time) as year,
     MONTH(dispatch_time) as month,
     DAY(dispatch_time) as day
