@@ -1,4 +1,4 @@
-package com.qdu;
+package com.qdu.service.hbase;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;

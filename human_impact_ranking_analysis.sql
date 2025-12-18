@@ -11,7 +11,7 @@
  Target Server Version : 80021
  File Encoding         : 65001
 
- Date: 08/12/2025 19:48:20
+ Date: 18/12/2025 19:55:15
 */
 
 SET NAMES utf8mb4;
@@ -27,7 +27,8 @@ CREATE TABLE `human_impact_ranking_analysis`  (
   `fips` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,
   `human_impact_score` decimal(20, 6) NOT NULL,
   `impact_rank` int NOT NULL,
+  `hid` int NOT NULL,
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 60 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 SET FOREIGN_KEY_CHECKS = 1;
