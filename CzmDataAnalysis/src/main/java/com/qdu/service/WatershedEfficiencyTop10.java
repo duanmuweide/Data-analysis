@@ -1,4 +1,4 @@
-package com.qdu;
+package com.qdu.service;
 
 import java.sql.*;
 import java.util.Properties;
