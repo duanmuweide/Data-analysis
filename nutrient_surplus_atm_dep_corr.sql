@@ -11,7 +11,7 @@
  Target Server Version : 80021
  File Encoding         : 65001
 
- Date: 09/12/2025 11:55:49
+ Date: 18/12/2025 20:20:15
 */
 
 SET NAMES utf8mb4;
@@ -27,7 +27,8 @@ CREATE TABLE `nutrient_surplus_atm_dep_corr`  (
   `avg_n_ag_surplus` decimal(20, 6) NOT NULL,
   `avg_n_atm_dep` decimal(20, 6) NOT NULL,
   `corr_coefficient` decimal(20, 6) NOT NULL,
+  `hid` int NOT NULL,
   PRIMARY KEY (`id`) USING BTREE
-) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 68 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci ROW_FORMAT = Dynamic;
 
 SET FOREIGN_KEY_CHECKS = 1;

@@ -159,7 +159,7 @@ public class WatershedNutrientHBaseUtil {
   // -------------------------- 6. 主方法（全流程入口） --------------------------
   public static void main(String[] args) {
     try {
-      // 1. HBase查询（替换为你的FIPS）
+      // 1. HBase查询 // 这里查询每次的指定水文编码的数据
       List<TrendData> trendData = queryHBase("10005", 2010, 2020);
 
       // 2. 写入MySQL
