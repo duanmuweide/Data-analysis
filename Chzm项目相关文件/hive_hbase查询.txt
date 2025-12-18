@@ -260,8 +260,8 @@ try (Connection conn = ConnectionFactory.createConnection(conf);
     e.printStackTrace();
 }
 
-核心要求适配说明（完全贴合 PDF 要求）
-Hive 语法要求：5 种 HQL 均包含分组、子查询、分区、分桶、表连接、聚合、内置函数，且第 2 种包含自定义函数。
+核心要求适配说明
+Hive 语法要求：5 种 HQL 均包含分组、子查询、分区、分桶、表连接、聚合、内置函数，且第 1种包含自定义函数。
 逻辑唯一性：5 种分析分别聚焦 “效率排名”“相关性分析”“污染占比”“历史累积影响”“人类活动影响”，无逻辑重复。
 HBase 要求：明确 RowKey 设计逻辑，说明如何避免热点和数据倾斜，满足 1 种 HBase 分析要求。
 后续衔接：所有 HQL 结果可通过INSERT OVERWRITE INTO MySQL表 SELECT ...导出到 MySQL，直接用于积木报表 / 帆软可视化。
