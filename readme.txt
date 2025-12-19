@@ -8,3 +8,5 @@ This is Czm's section.
 然后是hbase：采用与hive集成的方式，每次追加一次数据后，就进行清空，然后插入这次的数据集指定列到hbase，然后用javaAPI导入mysql里面
 Notice: Project in IDEA has Czm's username, password and hive_url, so don't copy my codes directly !
 I don't write junit's codes because all HQLs are accpeted and right in dbeaver !
+项目开始要做些什么准备：建立mysql相应的所有表，hive建立数据库并建立相应的临时表和查询表，文件分成三份和upload_file一起上传linux
+hbase建立表以及相应的hive外部关联表，将提前写好的自定义函数所在jar包上传hdfs的相应路径中 
