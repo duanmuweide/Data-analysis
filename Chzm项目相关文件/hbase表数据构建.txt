@@ -8,6 +8,7 @@ create_namespace 'watershed_hbase'
 create 'watershed_hbase.nutrient_surplus', 'cf_basic', 'cf_surplus'
 
 在 DBeaver 的 Hive 编辑器中执行以下 SQL，创建 Hive 外部表映射到上述 HBase 表：
+set hive.hbase.wal.enabled = FALSE ; 
 CREATE EXTERNAL TABLE hive_hbase_nutrient_surplus (
     rowkey STRING,  -- 对应HBase的RowKey（反转FIPS+_+4位年份）
     id INT,         -- 批次ID（你要筛选的特定ID）
@@ -30,6 +31,7 @@ TBLPROPERTIES (
 TRUNCATE TABLE hive_hbase_nutrient_surplus;  清空旧数据
 
 INSERT OVERWRITE TABLE hive_hbase_nutrient_surplus 插入新数据
+select max(id) from xxx  现从hive查询出此次id也就是最大id
 SELECT
     CONCAT(REVERSE(fips), '_', LPAD(CAST(year AS STRING), 4, '0')) AS rowkey,
     4 AS id,  -- 新批次ID（手动指定或从变量获取）
