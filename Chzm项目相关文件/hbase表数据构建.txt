@@ -46,3 +46,164 @@ WHERE
     AND year BETWEEN 2010 AND 2020;
 
 
+
+
+Hive 写 HBase + Phoenix 查 HBase 操作手册
+环境信息
+Hive：2.3.7
+HBase：2.2.4
+Hadoop：3.3.6
+Phoenix：2.2.5.1.3（CDH 发行版）
+ZK 地址：master-pc:2181（ZK 根路径：/hbase）
+一、Phoenix 与 HBase 适配配置（CDH 版专属）
+1. 拷贝 Phoenix 核心包到 HBase lib
+bash
+运行
+# 拷贝CDH Phoenix服务端包（让HBase识别Phoenix表）
+cp /opt/cloudera/parcels/CDH/lib/phoenix/phoenix-server.jar $HBASE_HOME/lib/
+cp /opt/cloudera/parcels/CDH/lib/phoenix/phoenix-hbase-compat-2.2.0.jar $HBASE_HOME/lib/
+
+# 同步Phoenix的HBase配置（对齐ZK参数）
+cp /opt/cloudera/parcels/CDH/lib/phoenix/conf/hbase-site.xml $HBASE_HOME/conf/
+
+# 重启HBase使配置生效
+stop-hbase.sh && start-hbase.sh
+2. 验证 HBase 服务状态
+bash
+运行
+# 查看HBase进程
+jps | grep HBase
+# 预期输出：HMaster、HRegionServer、HQuorumPeer
+
+# 测试HBase表可访问
+hbase shell
+list_namespace  # 确认watershed_hbase命名空间存在
+list 'watershed_hbase:nutrient_surplus'  # 确认目标表存在
+quit
+二、Phoenix 创建映射 HBase 的表
+1. 进入 CDH Phoenix 客户端
+bash
+运行
+/opt/cloudera/parcels/CDH/bin/sqlline.py master-pc:2181:/hbase
+2. Phoenix 中建表语句（对齐 HBase 表结构）
+sql
+-- 创建命名空间（对应HBase的watershed_hbase）
+CREATE SCHEMA IF NOT EXISTS watershed_hbase;
+USE watershed_hbase;
+
+-- 创建Phoenix表（映射HBase的nutrient_surplus表）
+CREATE TABLE IF NOT EXISTS watershed_hbase.nutrient_surplus (
+    rowkey VARCHAR PRIMARY KEY,  -- 对应HBase RowKey
+    cf_basic.id INTEGER,         -- 列族cf_basic:id
+    cf_basic.fips VARCHAR,       -- 列族cf_basic:fips
+    cf_basic.year INTEGER,       -- 列族cf_basic:year
+    cf_surplus.n_ag_surplus_kgsqkm DOUBLE,  -- 列族cf_surplus:n_ag_surplus_kgsqkm
+    cf_surplus.p_ag_surplus_kgsqkm DOUBLE   -- 列族cf_surplus:p_ag_surplus_kgsqkm
+)
+-- CDH版专属配置（适配HBase 2.2.4）
+COLUMN_ENCODED_BYTES=0  -- 关闭列编码，与HBase原生字段对齐
+COMPRESSION='SNAPPY'    -- 匹配CDH HBase默认压缩格式
+TABLE_NAME='watershed_hbase:nutrient_surplus';  -- 映射的HBase表名
+
+-- 退出Phoenix客户端
+!quit
+三、Hive 集成 Phoenix（实现 Hive 写 HBase）
+1. 拷贝 Phoenix-Hive 兼容包
+bash
+运行
+# 拷贝CDH Phoenix-Hive适配包到Hive lib
+cp /opt/cloudera/parcels/CDH/lib/phoenix/phoenix-hive.jar $HIVE_HOME/lib/
+cp /opt/cloudera/parcels/CDH/lib/phoenix/phoenix-client.jar $HIVE_HOME/lib/
+
+# 拷贝HBase Hadoop3兼容包（解决Hadoop 3.3.6冲突）
+cp /opt/cloudera/parcels/CDH/lib/hbase/hbase-hadoop3-compat.jar $HIVE_HOME/lib/
+
+# 拷贝Hadoop 3.x兼容包（可选，解决DFSClient报错）
+cp /opt/cloudera/parcels/CDH/lib/hadoop-hdfs/hadoop-hdfs-3.3.6-cdh6.3.2.jar $HIVE_HOME/lib/
+
+# 重启Hive服务
+hive --service metastore stop && hive --service hiveserver2 stop
+nohup hive --service metastore > $HIVE_HOME/logs/metastore.log 2>&1 &
+nohup hive --service hiveserver2 > $HIVE_HOME/logs/hiveserver2.log 2>&1 &
+2. Hive 中创建外部表（映射 Phoenix 表）
+sql
+-- 基础配置（适配CDH环境）
+set hive.exec.dynamic.partition.mode=nonstrict;
+set phoenix.zookeeper.quorum=master-pc;
+set phoenix.zookeeper.znode.parent=/hbase;  -- CDH ZK根路径，必须指定
+
+-- 创建Hive外部表（通过Phoenix映射HBase）
+CREATE EXTERNAL TABLE hive_phoenix_nutrient_surplus (
+    rowkey STRING,
+    id INT,
+    fips STRING,
+    year INT,
+    n_ag_surplus_kgsqkm DOUBLE,
+    p_ag_surplus_kgsqkm DOUBLE
+)
+STORED BY 'org.apache.phoenix.hive.PhoenixStorageHandler'
+WITH SERDEPROPERTIES (
+    "phoenix.table.name" = "watershed_hbase.nutrient_surplus",  -- Phoenix表名（含命名空间）
+    "phoenix.column.mapping" = "rowkey:rowkey,id:cf_basic.id,fips:cf_basic.fips,year:cf_basic.year,n_ag_surplus_kgsqkm:cf_surplus.n_ag_surplus_kgsqkm,p_ag_surplus_kgsqkm:cf_surplus.p_ag_surplus_kgsqkm"
+)
+TBLPROPERTIES (
+    "phoenix.zookeeper.quorum" = "master-pc",
+    "phoenix.zookeeper.port" = "2181",
+    "phoenix.zookeeper.znode.parent" = "/hbase"  -- CDH专属：HBase在ZK的根节点
+);
+四、全链路验证
+1. Hive 插入数据（写入 HBase）
+sql
+-- 插入测试数据
+INSERT INTO hive_phoenix_nutrient_surplus 
+VALUES ('fips456_2024', 2, 'fips456', 2024, 15.8, 3.6);
+2. Phoenix 查询 HBase 数据（验证写入）
+bash
+运行
+# 进入CDH Phoenix客户端
+/opt/cloudera/parcels/CDH/bin/sqlline.py master-pc:2181:/hbase
+
+# 执行查询
+SELECT * FROM watershed_hbase.nutrient_surplus WHERE rowkey = 'fips456_2024';
+
+# 退出客户端
+!quit
+3. 直接查询 HBase 验证（可选）
+bash
+运行
+hbase shell
+scan 'watershed_hbase:nutrient_surplus', {ROWPREFIXFILTER => 'fips456_2024'}
+quit
+五、常见问题解决
+问题 1：Phoenix 客户端连接超时
+现象：sqlline.py master-pc:2181 连接失败
+解决：补充 ZK 根路径，命令改为：
+bash
+运行
+/opt/cloudera/parcels/CDH/bin/sqlline.py master-pc:2181:/hbase
+问题 2：Hive 插入数据报 TableNotFoundException
+原因：Phoenix 表名大小写敏感（CDH 版）
+解决：Phoenix 建表和 Hive 映射均使用大写表名：
+sql
+-- Phoenix中建表
+CREATE TABLE IF NOT EXISTS WATERSHED_HBASE.NUTRIENT_SURPLUS (...);
+
+-- Hive表中phoenix.table.name改为大写
+"phoenix.table.name" = "WATERSHED_HBASE.NUTRIENT_SURPLUS"
+问题 3：Hadoop 3.3.6 兼容性报错（NoSuchMethodError）
+解决：拷贝 CDH Hadoop 3.x 兼容包：
+bash
+运行
+cp /opt/cloudera/parcels/CDH/lib/hadoop-hdfs/hadoop-hdfs-3.3.6-cdh6.3.2.jar $HIVE_HOME/lib/
+六、备用方案（Hive 写 HFile 批量加载到 HBase）
+若 Phoenix 集成报错，可采用批量写 HFile 方式：
+bash
+运行
+# 1. Hive将数据导出为HFile格式
+INSERT OVERWRITE DIRECTORY '/tmp/hbase_hfile'
+ROW FORMAT SERDE 'org.apache.hadoop.hive.hbase.HBaseSerDe'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" = ":key,cf_basic:id,cf_basic:fips,cf_basic:year,cf_surplus:n_ag_surplus_kgsqkm,cf_surplus:p_ag_surplus_kgsqkm")
+SELECT rowkey, id, fips, year, n_ag_surplus_kgsqkm, p_ag_surplus_kgsqkm FROM your_source_table;
+
+# 2. 将HFile加载到HBase表
+hbase org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles /tmp/hbase_hfile watershed_hbase:nutrient_surplus
