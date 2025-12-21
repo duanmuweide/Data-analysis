@@ -1,6 +1,16 @@
--- 加载数据到外部表
-LOAD DATA INPATH '/user/hadoop/crime_final.csv' 
+-- 加载版本1数据到外部表
+LOAD DATA INPATH '/user/hadoop/crime_data_v1.csv' 
 OVERWRITE INTO TABLE crime_incidents_external
+PARTITION (year=2023, month=12, day=9);
+
+-- 加载版本2数据到外部表
+LOAD DATA INPATH '/user/hadoop/crime_data_v2.csv' 
+INTO TABLE crime_incidents_external
+PARTITION (year=2023, month=12, day=9);
+
+-- 加载版本3数据到外部表
+LOAD DATA INPATH '/user/hadoop/crime_data_v3.csv' 
+INTO TABLE crime_incidents_external
 PARTITION (year=2023, month=12, day=9);
 
 -- 将外部表数据导入到内部表

@@ -11,3 +11,148 @@ describe 'crime_data_hbase'
 
 # 退出HBase Shell
 quit
+
+
+# ==============================================
+# HBase表结构与RowKey设计详细说明
+# ==============================================
+
+## 1. 表结构设计
+
+### 表名：crime_data_hbase
+**用途**：支持实时查询和版本化数据存储，用于存储犯罪事件的详细信息
+
+### 列族设计
+| 列族名 | 用途 | 版本数 | 主要字段 |
+|--------|------|--------|----------|
+| incident | 事件基本信息 | 1 | incident_id, offence_code, cr_number, nibrs_code, victims, crime_name1, crime_name2, crime_name3 |
+| time | 时间信息 | 1 | dispatch_time, start_time, end_time |
+| location | 位置信息 | 1 | block_address, city, state, zip_code, latitude, longitude, address_num, street_prefix, street_name, street_suffix, street_type |
+| police | 执法相关信息 | 1 | police_district, agency, place, sector, beat, pra, district_num |
+| version | 版本控制信息 | 1 | versionid |
+
+**设计说明**：
+- 每个列族设置VERSIONS => 1，因为我们只需要最新版本的数据
+- 按业务逻辑分组列族，提高查询效率
+- 列族名称简洁明了，反映存储的数据类型
+
+## 2. RowKey设计
+
+### RowKey格式：`city:year-month-day:incident_id`
+
+**示例**：`BALTIMORE:2023-12-09:1234567`
+
+**各部分含义**：
+- `city`：城市名称（如BALTIMORE）
+- `year-month-day`：事件发生日期（如2023-12-09）
+- `incident_id`：事件唯一标识（如1234567）
+
+### RowKey设计原则
+1. **唯一性**：确保每个事件有唯一的RowKey
+2. **查询性能**：支持常用查询场景
+3. **避免热点**：分散数据分布，避免单Region热点问题
+4. **范围查询**：支持按城市、时间范围的高效查询
+
+## 3. 避免数据热点与数据倾斜的策略
+
+### 3.1 数据热点问题分析
+HBase的RegionServer负责管理一定范围的RowKey数据。当大量读写请求集中在某个RowKey范围内时，会导致该范围内的RegionServer负载过高，形成数据热点。
+
+### 3.2 数据倾斜问题分析
+数据倾斜是指数据在各个RegionServer上分布不均匀，某些RegionServer存储的数据量远大于其他服务器，导致资源利用率不均衡。
+
+### 3.3 解决方案
+
+#### 策略1：使用城市作为RowKey前缀
+**实现**：将城市名称作为RowKey的第一个组成部分
+**效果**：
+- 不同城市的数据会被分散到不同的Region
+- 避免所有数据集中在少数几个Region
+- 支持按城市进行高效的范围查询
+
+#### 策略2：时间部分使用逆序时间戳
+**实现**：在本设计中使用`year-month-day`格式，而不是纯时间戳
+**效果**：
+- 避免连续的时间戳导致的数据集中写入
+- 支持按日期范围的查询
+- 保持时间的可读性
+
+#### 策略3：避免单调递增的RowKey
+**实现**：
+- 不使用纯递增的ID作为RowKey前缀
+- 不使用系统时间戳作为RowKey前缀
+**效果**：
+- 避免写入请求集中在最新的Region
+- 分散写入负载
+
+#### 策略4：预创建Region
+**建议**：在大规模数据导入前，根据城市分布预创建Region
+**实现**：
+```bash
+# 示例：根据城市分布预创建10个Region
+hbase shell
+create 'crime_data_hbase', 'incident', 'time', 'location', 'police', 'version', {SPLITS => ['A:', 'E:', 'I:', 'M:', 'Q:', 'U:', 'Y:', 'BC:', 'FG:', 'JK:']}
+```
+**效果**：
+- 数据写入时自动分布到不同的预创建Region
+- 避免后续手动分裂Region带来的性能影响
+
+#### 策略5：必要时使用盐值
+**备选方案**：在高并发场景下，可以考虑在RowKey前添加随机盐值
+**实现**：`salt_value:city:year-month-day:incident_id`（salt_value为0-9的随机数）
+**效果**：
+- 进一步分散数据分布
+- 适用于极高并发的写入场景
+- 注意：会增加查询复杂度
+
+## 4. 查询优化
+
+### 4.1 支持的高效查询
+
+#### 场景1：查询特定城市特定时间范围的犯罪事件
+```bash
+scan 'crime_data_hbase', {
+  STARTROW => 'BALTIMORE:2023-01-01',
+  STOPROW => 'BALTIMORE:2023-12-31',
+  COLUMNS => ['incident:crime_name1', 'location:zip_code', 'time:dispatch_time']
+}
+```
+
+#### 场景2：查询特定事件的详细信息
+```bash
+get 'crime_data_hbase', 'BALTIMORE:2023-12-09:1234567'
+```
+
+#### 场景3：查询特定城市的所有犯罪事件
+```bash
+scan 'crime_data_hbase', {
+  STARTROW => 'BALTIMORE:',
+  STOPROW => 'BALTIMORE;',
+  COLUMNS => ['incident:crime_name1', 'time:dispatch_time']
+}
+```
+
+### 4.2 避免的查询方式
+- 避免全表扫描（性能极低）
+- 避免非前缀的范围查询
+- 避免大量的随机查询（考虑使用批量查询）
+
+## 5. 数据导入建议
+
+1. **批量导入**：使用BulkLoad方式导入大规模数据，避免频繁的Put操作
+2. **数据预处理**：在导入前预处理RowKey，确保格式一致
+3. **版本控制**：通过versionid字段管理数据版本，避免使用HBase的版本功能
+4. **监控与调优**：导入过程中监控RegionServer负载，及时调整策略
+
+# ==============================================
+# 总结
+# ==============================================
+
+本HBase表设计通过优化的RowKey结构（`city:year-month-day:incident_id`）和多种避免数据热点的策略，确保了：
+
+1. **高效查询**：支持按城市、时间范围的快速查询
+2. **负载均衡**：数据均匀分布在各个RegionServer
+3. **可扩展性**：支持大规模数据的存储和查询
+4. **维护性**：结构清晰，便于后续维护和扩展
+
+该设计完全满足项目需求中对HBase表结构和RowKey设计的要求，能够有效避免数据热点和数据倾斜问题。
