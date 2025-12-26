@@ -6,526 +6,305 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class AreaPriceAnalysisDataInsert {
 
-    // Hive连接配置
-    private static final String HIVE_JDBC_URL = "jdbc:hive2://master-pc:10000/dataanalysis;user=master-pc";
+    // === Hive 配置 ===
+    private static final String HIVE_JDBC_URL = "jdbc:hive2://hadoop101:10000/cjz;user=master";
     private static final String HIVE_USER = "";
     private static final String HIVE_PASSWORD = "";
 
-    // 表配置
-    private static final String SOURCE_TABLE = "house_info_clean";
+    // === MySQL 配置 ===
+    private static final String MYSQL_JDBC_URL =
+            "jdbc:mysql://localhost:3306/cjz?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
+    private static final String MYSQL_USER = "root";       // 👈 请替换为实际用户名
+    private static final String MYSQL_PASSWORD = "root"; // 👈 请替换为实际密码
+
+    private static final String SOURCE_TABLE = "house_info_clean_checkid";
     private static final String TARGET_TABLE = "area_price_analysis";
-    private static final String DATABASE = "dataanalysis";
+    private static final String DATABASE = "cjz";
+    private static final int ANALYSIS_CHECKID = 3;
 
-    // 分区值
     private static final String PARTITION_VALUE;
-
     static {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
         PARTITION_VALUE = sdf.format(new Date());
     }
 
     public static void main(String[] args) {
-        // 设置Hadoop用户身份
-        System.setProperty("HADOOP_USER_NAME", "master-pc");
-
-        System.out.println("===== 面积区间房价分析程序（分桶表版本）=====");
+        System.setProperty("HADOOP_USER_NAME", "master");
+        System.out.println("===== 面积区间房价分析（无UDF + 含checkid）=====");
+        System.out.println("分析批次: checkid = " + ANALYSIS_CHECKID);
         System.out.println("分区日期: " + PARTITION_VALUE);
 
-        Connection conn = null;
+        Connection hiveConn = null;
+        Connection mysqlConn = null;
 
         try {
-            // 1. 建立Hive连接
+            // === 1. 连接 Hive ===
             Class.forName("org.apache.hive.jdbc.HiveDriver");
-            conn = DriverManager.getConnection(HIVE_JDBC_URL, HIVE_USER, HIVE_PASSWORD);
+            hiveConn = DriverManager.getConnection(HIVE_JDBC_URL, HIVE_USER, HIVE_PASSWORD);
             System.out.println("✓ Hive连接成功");
 
-            // 2. 设置分桶和动态分区参数
-            setupHiveParameters(conn);
+            setupHiveParameters(hiveConn);
 
-            // 3. 检查源表数据
-            long sourceCount = checkSourceData(conn);
+            System.out.println("🔍 正在检查源表数据量...");
+            long sourceCount = checkSourceData(hiveConn);
             if (sourceCount == 0) {
-                System.out.println("源表没有数据，退出程序");
+                System.out.println("⚠️ 源表无有效数据（checkid=" + ANALYSIS_CHECKID + "），退出");
                 return;
             }
+            System.out.println("✅ 源表有效数据量: " + sourceCount + " 条");
 
-            // 4. 执行复杂的数据分析并插入数据
-            insertComplexAreaAnalysisData(conn);
+            // === 2. 执行 Hive 分析并写入 ===
+            insertAreaAnalysisData(hiveConn);
+            executeValidation(hiveConn);
+            System.out.println("\n✅ Hive分析完成！数据已写入分区 pt_date='" + PARTITION_VALUE + "', checkid=" + ANALYSIS_CHECKID);
 
-            // 5. 验证插入结果
-            verifyInsertResult(conn);
+            // === 3. 连接 MySQL ===
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            mysqlConn = DriverManager.getConnection(MYSQL_JDBC_URL, MYSQL_USER, MYSQL_PASSWORD);
+            System.out.println("✓ MySQL连接成功");
 
-            System.out.println("面积区间房价分析完成！");
+            // === 4. 从 Hive 读取刚写入的数据，并写入 MySQL ===
+            syncHiveToMysql(hiveConn, mysqlConn);
+
+            System.out.println("✅ 数据已同步至 MySQL 表 " + TARGET_TABLE);
 
         } catch (Exception e) {
-            System.err.println("数据处理过程中出现错误:");
+            System.err.println("❌ 执行失败:");
             e.printStackTrace();
         } finally {
-            if (conn != null) {
-                try { conn.close(); } catch (SQLException e) { e.printStackTrace(); }
+            // 关闭连接
+            if (hiveConn != null) {
+                try {
+                    System.out.println("CloseOperation: 关闭 Hive 连接...");
+                    hiveConn.close();
+                } catch (SQLException ignored) {}
+            }
+            if (mysqlConn != null) {
+                try {
+                    System.out.println("CloseOperation: 关闭 MySQL 连接...");
+                    mysqlConn.close();
+                } catch (SQLException ignored) {}
             }
         }
     }
 
-    /**
-     * 设置Hive参数（针对分桶表和事务表）
-     */
     private static void setupHiveParameters(Connection conn) throws SQLException {
-        System.out.println("设置Hive参数...");
-
-        // 设置分桶相关参数
-        String[] hiveParams = {
-                "SET hive.enforce.bucketing = true",
+        String[] params = {
                 "SET hive.exec.dynamic.partition = true",
                 "SET hive.exec.dynamic.partition.mode = nonstrict",
-                "SET hive.txn.manager = org.apache.hadoop.hive.ql.lockmgr.DbTxnManager",
-                "SET hive.compactor.initiator.on = true",
-                "SET hive.compactor.worker.threads = 1",
-                "SET hive.support.concurrency = true"
+                "SET hive.vectorized.execution.enabled = true",
+                "SET hive.cbo.enable = true",
+                "SET hive.fetch.task.conversion = more"
         };
-
-        for (String param : hiveParams) {
+        for (String param : params) {
             try (PreparedStatement stmt = conn.prepareStatement(param)) {
                 stmt.execute();
+                System.out.println("✓ 已设置: " + param);
             }
         }
-        System.out.println("✓ Hive参数设置完成");
     }
 
-    /**
-     * 检查源表数据
-     */
     private static long checkSourceData(Connection conn) throws SQLException {
-        System.out.println("\n检查源表数据...");
-
-        String countSQL = String.format(
-                "SELECT COUNT(*) as total_count FROM %s.%s WHERE area > 0 AND price_per_sqm > 0",
-                DATABASE, SOURCE_TABLE
+        String sql = String.format(
+                "SELECT COUNT(*) FROM %s.%s WHERE area > 0 AND price_per_sqm > 0 AND checkid = %d",
+                DATABASE, SOURCE_TABLE, ANALYSIS_CHECKID
         );
-
-        try (PreparedStatement stmt = conn.prepareStatement(countSQL);
-             ResultSet rs = stmt.executeQuery()) {
-
+        System.out.println("Executing: " + sql);
+        long start = System.currentTimeMillis();
+        try (PreparedStatement stmt = conn.prepareStatement(sql); ResultSet rs = stmt.executeQuery()) {
             if (rs.next()) {
-                long count = rs.getLong("total_count");
-                System.out.println("有效房屋数据记录数: " + count);
+                long count = rs.getLong(1);
+                System.out.println("⏱️ checkSourceData 耗时: " + (System.currentTimeMillis() - start) + "ms");
                 return count;
             }
         }
-
         return 0;
     }
 
-    /**
-     * 执行复杂的面积分析并插入数据
-     */
-    private static void insertComplexAreaAnalysisData(Connection conn) throws SQLException {
-        System.out.println("\n执行复杂的面积区间房价分析...");
+    private static void insertAreaAnalysisData(Connection conn) throws SQLException {
+        String sql = "WITH base_data AS (\n" +
+                " SELECT \n" +
+                " CASE\n" +
+                " WHEN area < 50 THEN '50㎡以下'\n" +
+                " WHEN area < 90 THEN '50-90㎡'\n" +
+                " WHEN area < 144 THEN '90-144㎡'\n" +
+                " WHEN area < 236 THEN '144-236㎡'\n" +
+                " ELSE '236㎡以上'\n" +
+                " END AS area_range,\n" +
+                " price_per_sqm,\n" +
+                " house_age\n" +
+                " FROM " + DATABASE + "." + SOURCE_TABLE + "\n" +
+                " WHERE area > 0 AND price_per_sqm > 0 AND checkid = " + ANALYSIS_CHECKID + "\n" +
+                "),\n" +
+                "agg_summary AS (\n" +
+                " SELECT \n" +
+                " area_range,\n" +
+                " COUNT(*) AS house_count,\n" +
+                " CAST(AVG(price_per_sqm) AS INT) AS avg_price_per_sqm,\n" +
+                " MIN(price_per_sqm) AS min_price,\n" +
+                " MAX(price_per_sqm) AS max_price,\n" +
+                " CAST(AVG(house_age) AS INT) AS avg_house_age\n" +
+                " FROM base_data\n" +
+                " GROUP BY area_range\n" +
+                " HAVING COUNT(*) >= 10\n" +
+                ")\n" +
+                "INSERT INTO TABLE " + DATABASE + "." + TARGET_TABLE + " PARTITION (pt_date = '" + PARTITION_VALUE + "')\n" +
+                "SELECT \n" +
+                " a.area_range,\n" +
+                " a.house_count,\n" +
+                " a.avg_price_per_sqm,\n" +
+                " a.min_price,\n" +
+                " a.max_price,\n" +
+                " CAST(PERCENTILE_APPROX(CAST(b.price_per_sqm AS BIGINT), 0.5) AS INT) AS median_price,\n" +
+                " CAST(VARIANCE(CAST(b.price_per_sqm AS DOUBLE)) AS INT) AS price_variance,\n" +
+                " CAST(STDDEV(CAST(b.price_per_sqm AS DOUBLE)) AS INT) AS price_stddev,\n" +
+                " a.avg_house_age,\n" +
+                " '" + PARTITION_VALUE + "' AS load_date,\n" +
+                " CASE\n" +
+                " WHEN a.avg_price_per_sqm < 10000 THEN '低单价区'\n" +
+                " WHEN a.avg_price_per_sqm < 30000 THEN '中单价区'\n" +
+                " WHEN a.avg_price_per_sqm < 50000 THEN '高单价区'\n" +
+                " ELSE '超高单价区'\n" +
+                " END AS price_level,\n" +
+                " CAST(ROUND(a.house_count * 100.0 / SUM(a.house_count) OVER (), 2) AS DECIMAL(5,2)) AS area_ratio,\n" +
+                " " + ANALYSIS_CHECKID + " AS checkid\n" +
+                "FROM agg_summary a\n" +
+                "JOIN base_data b ON a.area_range = b.area_range\n" +
+                "GROUP BY \n" +
+                " a.area_range, a.house_count, a.avg_price_per_sqm, a.min_price, a.max_price, a.avg_house_age\n" +
+                "ORDER BY \n" +
+                " CASE a.area_range\n" +
+                " WHEN '50㎡以下' THEN 1\n" +
+                " WHEN '50-90㎡' THEN 2\n" +
+                " WHEN '90-144㎡' THEN 3\n" +
+                " WHEN '144-236㎡' THEN 4\n" +
+                " ELSE 5\n" +
+                " END";
 
-        // 构建复杂的HQL语句
-        String complexSQL = buildComplexAreaAnalysisSQL();
+        System.out.println("🚀 开始执行插入SQL（此操作可能需要数分钟，请耐心等待）...");
+        System.out.println("💡 提示：如果集群资源紧张，YARN 任务启动可能较慢，但仍在运行中。");
+        long start = System.currentTimeMillis();
 
-        System.out.println("执行复杂分析SQL:");
-        printLine(100);
-        System.out.println(complexSQL);
-        printLine(100);
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+        scheduler.scheduleAtFixedRate(() -> {
+            long elapsedSec = (System.currentTimeMillis() - start) / 1000;
+            System.out.println("⏳ 插入操作仍在进行中... 已耗时 " + elapsedSec + " 秒");
+        }, 30, 30, TimeUnit.SECONDS);
 
-        long startTime = System.currentTimeMillis();
-
-        try (PreparedStatement stmt = conn.prepareStatement(complexSQL)) {
-            int result = stmt.executeUpdate();
-            long endTime = System.currentTimeMillis();
-
-            System.out.println("✓ 复杂面积分析插入成功，耗时: " + (endTime - startTime) + "ms");
-            System.out.println("✓ 数据已插入到分区: pt_date='" + PARTITION_VALUE + "'");
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.executeUpdate();
+            scheduler.shutdownNow();
+            long duration = System.currentTimeMillis() - start;
+            System.out.println("✅ 插入成功！总耗时: " + duration + " ms (" + (duration / 1000) + " 秒)");
         } catch (SQLException e) {
-            System.err.println("执行复杂SQL时出错: " + e.getMessage());
-            System.err.println("尝试使用简化版本...");
-            insertSimpleAreaAnalysisData(conn);
+            scheduler.shutdownNow();
+            System.err.println("💥 插入SQL执行失败！错误详情:");
+            System.err.println("SQL: " + sql.substring(0, Math.min(200, sql.length())) + "...");
+            throw e;
         }
     }
 
-    /**
-     * 构建复杂的面积分析SQL语句
-     * 包含：子查询、窗口函数、聚合函数、内置函数等
-     */
-    private static String buildComplexAreaAnalysisSQL() {
-        StringBuilder sql = new StringBuilder();
-
-        sql.append("-- 使用INSERT OVERWRITE覆盖写入目标表分区（支持分桶表）\n");
-        sql.append("INSERT OVERWRITE TABLE ").append(DATABASE).append(".").append(TARGET_TABLE);
-        sql.append(" PARTITION (pt_date) \n\n");
-
-        sql.append("SELECT \n");
-        sql.append("    -- 分桶字段必须放在最前面\n");
-        sql.append("    area_range,\n");
-        sql.append("    \n");
-        sql.append("    -- 1. 房屋数量\n");
-        sql.append("    CAST(COUNT(*) AS INT) as house_count,\n");
-        sql.append("    \n");
-        sql.append("    -- 2. 平均单价\n");
-        sql.append("    CAST(ROUND(\n");
-        sql.append("        AVG(\n");
-        sql.append("            CASE \n");
-        sql.append("                WHEN price_per_sqm <= 0 THEN NULL\n");
-        sql.append("                WHEN price_per_sqm > 500000 THEN 500000\n");
-        sql.append("                ELSE CAST(price_per_sqm AS DOUBLE)\n");
-        sql.append("            END\n");
-        sql.append("        )\n");
-        sql.append("    ) AS INT) as avg_price_per_sqm,\n");
-        sql.append("    \n");
-        sql.append("    -- 3. 最低单价\n");
-        sql.append("    CAST(\n");
-        sql.append("        MIN(\n");
-        sql.append("            CASE \n");
-        sql.append("                WHEN price_per_sqm > 0 THEN price_per_sqm\n");
-        sql.append("                ELSE NULL\n");
-        sql.append("            END\n");
-        sql.append("        )\n");
-        sql.append("    AS INT) as min_price,\n");
-        sql.append("    \n");
-        sql.append("    -- 4. 最高单价\n");
-        sql.append("    CAST(\n");
-        sql.append("        MAX(\n");
-        sql.append("            CASE \n");
-        sql.append("                WHEN price_per_sqm > 0 THEN price_per_sqm\n");
-        sql.append("                ELSE NULL\n");
-        sql.append("            END\n");
-        sql.append("        )\n");
-        sql.append("    AS INT) as max_price,\n");
-        sql.append("    \n");
-        sql.append("    -- 5. 中位数单价（使用PERCENTILE_APPROX函数）\n");
-        sql.append("    CAST(ROUND(\n");
-        sql.append("        PERCENTILE_APPROX(\n");
-        sql.append("            CAST(\n");
-        sql.append("                CASE \n");
-        sql.append("                    WHEN price_per_sqm > 0 THEN price_per_sqm\n");
-        sql.append("                    ELSE NULL\n");
-        sql.append("                END \n");
-        sql.append("            AS BIGINT), \n");
-        sql.append("            0.5\n");
-        sql.append("        )\n");
-        sql.append("    ) AS INT) as median_price,\n");
-        sql.append("    \n");
-        sql.append("    -- 6. 价格方差\n");
-        sql.append("    CAST(ROUND(\n");
-        sql.append("        VARIANCE(\n");
-        sql.append("            CAST(\n");
-        sql.append("                CASE \n");
-        sql.append("                    WHEN price_per_sqm > 0 AND price_per_sqm <= 500000 \n");
-        sql.append("                    THEN price_per_sqm\n");
-        sql.append("                    ELSE NULL\n");
-        sql.append("                END\n");
-        sql.append("            AS DOUBLE)\n");
-        sql.append("        )\n");
-        sql.append("    ) AS INT) as price_variance,\n");
-        sql.append("    \n");
-        sql.append("    -- 7. 价格标准差\n");
-        sql.append("    CAST(ROUND(\n");
-        sql.append("        STDDEV(\n");
-        sql.append("            CAST(\n");
-        sql.append("                CASE \n");
-        sql.append("                    WHEN price_per_sqm > 0 AND price_per_sqm <= 500000 \n");
-        sql.append("                    THEN price_per_sqm\n");
-        sql.append("                    ELSE NULL\n");
-        sql.append("                END\n");
-        sql.append("            AS DOUBLE)\n");
-        sql.append("        )\n");
-        sql.append("    ) AS INT) as price_stddev,\n");
-        sql.append("    \n");
-        sql.append("    -- 8. 平均房龄\n");
-        sql.append("    CAST(ROUND(\n");
-        sql.append("        AVG(\n");
-        sql.append("            CASE \n");
-        sql.append("                WHEN house_age >= 0 AND house_age <= 100 \n");
-        sql.append("                THEN CAST(house_age AS DOUBLE)\n");
-        sql.append("                ELSE NULL\n");
-        sql.append("            END\n");
-        sql.append("        )\n");
-        sql.append("    ) AS INT) as avg_house_age,\n");
-        sql.append("    \n");
-        sql.append("    -- 9. 加载日期\n");
-        sql.append("    '").append(PARTITION_VALUE).append("' as load_date,\n");
-        sql.append("    \n");
-        sql.append("    -- 10. 分区字段（必须放在最后）\n");
-        sql.append("    '").append(PARTITION_VALUE).append("' as pt_date\n");
-        sql.append("    \n");
-        sql.append("FROM (\n");
-        sql.append("    -- 子查询：对房屋按面积区间分类\n");
-        sql.append("    SELECT \n");
-        sql.append("        CASE \n");
-        sql.append("            WHEN area < 50 THEN '50㎡以下'\n");
-        sql.append("            WHEN area >= 50 AND area < 90 THEN '50-90㎡'\n");
-        sql.append("            WHEN area >= 90 AND area < 144 THEN '90-144㎡'\n");
-        sql.append("            WHEN area >= 144 AND area < 236 THEN '144-236㎡'\n");
-        sql.append("            ELSE '236㎡以上'\n");
-        sql.append("        END as area_range,\n");
-        sql.append("        price_per_sqm,\n");
-        sql.append("        house_age\n");
-        sql.append("    FROM ").append(DATABASE).append(".").append(SOURCE_TABLE).append("\n");
-        sql.append("    WHERE area IS NOT NULL AND area > 0\n");
-        sql.append("      AND price_per_sqm IS NOT NULL AND price_per_sqm > 0\n");
-        sql.append("      AND house_age IS NOT NULL AND house_age >= 0\n");
-        sql.append(") classified_data\n");
-        sql.append("GROUP BY area_range\n");
-        sql.append("HAVING COUNT(*) >= 10  -- 至少有10条记录\n");
-        sql.append("ORDER BY \n");
-        sql.append("    CASE area_range\n");
-        sql.append("        WHEN '50㎡以下' THEN 1\n");
-        sql.append("        WHEN '50-90㎡' THEN 2\n");
-        sql.append("        WHEN '90-144㎡' THEN 3\n");
-        sql.append("        WHEN '144-236㎡' THEN 4\n");
-        sql.append("        ELSE 5\n");
-        sql.append("    END");
-
-        return sql.toString();
-    }
-
-    /**
-     * 简化版本（如果复杂版本失败）
-     */
-    private static void insertSimpleAreaAnalysisData(Connection conn) throws SQLException {
-        System.out.println("使用简化版本SQL...");
-
-        StringBuilder simpleSQL = new StringBuilder();
-        simpleSQL.append("INSERT OVERWRITE TABLE ").append(DATABASE).append(".").append(TARGET_TABLE);
-        simpleSQL.append(" PARTITION (pt_date) \n");
-        simpleSQL.append("SELECT \n");
-        simpleSQL.append("    CASE \n");
-        simpleSQL.append("        WHEN area < 50 THEN '50㎡以下'\n");
-        simpleSQL.append("        WHEN area >= 50 AND area < 90 THEN '50-90㎡'\n");
-        simpleSQL.append("        WHEN area >= 90 AND area < 144 THEN '90-144㎡'\n");
-        simpleSQL.append("        WHEN area >= 144 AND area < 236 THEN '144-236㎡'\n");
-        simpleSQL.append("        ELSE '236㎡以上'\n");
-        simpleSQL.append("    END as area_range,\n");
-        simpleSQL.append("    CAST(COUNT(*) AS INT) as house_count,\n");
-        simpleSQL.append("    CAST(ROUND(AVG(price_per_sqm)) AS INT) as avg_price_per_sqm,\n");
-        simpleSQL.append("    CAST(MIN(price_per_sqm) AS INT) as min_price,\n");
-        simpleSQL.append("    CAST(MAX(price_per_sqm) AS INT) as max_price,\n");
-        simpleSQL.append("    CAST(ROUND(AVG(price_per_sqm)) AS INT) as median_price,\n");
-        simpleSQL.append("    0 as price_variance,\n");
-        simpleSQL.append("    0 as price_stddev,\n");
-        simpleSQL.append("    CAST(ROUND(AVG(house_age)) AS INT) as avg_house_age,\n");
-        simpleSQL.append("    '").append(PARTITION_VALUE).append("' as load_date,\n");
-        simpleSQL.append("    '").append(PARTITION_VALUE).append("' as pt_date\n");
-        simpleSQL.append("FROM ").append(DATABASE).append(".").append(SOURCE_TABLE).append("\n");
-        simpleSQL.append("WHERE area > 0 AND price_per_sqm > 0\n");
-        simpleSQL.append("GROUP BY \n");
-        simpleSQL.append("    CASE \n");
-        simpleSQL.append("        WHEN area < 50 THEN '50㎡以下'\n");
-        simpleSQL.append("        WHEN area >= 50 AND area < 90 THEN '50-90㎡'\n");
-        simpleSQL.append("        WHEN area >= 90 AND area < 144 THEN '90-144㎡'\n");
-        simpleSQL.append("        WHEN area >= 144 AND area < 236 THEN '144-236㎡'\n");
-        simpleSQL.append("        ELSE '236㎡以上'\n");
-        simpleSQL.append("    END\n");
-        simpleSQL.append("HAVING COUNT(*) >= 10\n");
-
-        System.out.println("简化SQL:");
-        printLine(80);
-        System.out.println(simpleSQL.toString());
-        printLine(80);
-
-        long startTime = System.currentTimeMillis();
-
-        try (PreparedStatement stmt = conn.prepareStatement(simpleSQL.toString())) {
-            int result = stmt.executeUpdate();
-            long endTime = System.currentTimeMillis();
-
-            System.out.println("✓ 简化版本数据插入成功，耗时: " + (endTime - startTime) + "ms");
+    private static void executeValidation(Connection conn) throws SQLException {
+        String sql = String.format(
+                "SELECT area_range, house_count, avg_price_per_sqm, price_level, checkid " +
+                        "FROM %s.%s WHERE pt_date = '%s' AND checkid = %d " +
+                        "ORDER BY avg_price_per_sqm DESC LIMIT 5",
+                DATABASE, TARGET_TABLE, PARTITION_VALUE, ANALYSIS_CHECKID
+        );
+        System.out.println("🔍 正在验证写入结果...");
+        try (PreparedStatement stmt = conn.prepareStatement(sql); ResultSet rs = stmt.executeQuery()) {
+            System.out.println("\n🔍 验证结果（前5条）:");
+            System.out.println("面积区间\t数量\t均价\t等级\tcheckid");
+            boolean hasData = false;
+            while (rs.next()) {
+                hasData = true;
+                System.out.printf("%s\t%d\t%d\t%s\t%d%n",
+                        rs.getString("area_range"),
+                        rs.getInt("house_count"),
+                        rs.getInt("avg_price_per_sqm"),
+                        rs.getString("price_level"),
+                        rs.getInt("checkid")
+                );
+            }
+            if (!hasData) {
+                System.out.println("⚠️ 未查到写入数据，请检查分区或条件是否正确。");
+            }
         }
     }
 
-    /**
-     * 验证插入结果
-     */
-    private static void verifyInsertResult(Connection conn) throws SQLException {
-        System.out.println("\n验证面积区间房价分析结果...");
+    // ================= 新增方法：同步 Hive → MySQL =================
+    private static void syncHiveToMysql(Connection hiveConn, Connection mysqlConn) throws SQLException {
+        String selectSql = String.format(
+                "SELECT " +
+                        "area_range, house_count, avg_price_per_sqm, min_price, max_price, " +
+                        "median_price, price_variance, price_stddev, avg_house_age, load_date, " +
+                        "price_level, area_ratio, checkid, '%s' AS pt_date " +
+                        "FROM %s.%s " +
+                        "WHERE pt_date = '%s' AND checkid = %d",
+                PARTITION_VALUE,
+                DATABASE, TARGET_TABLE,
+                PARTITION_VALUE, ANALYSIS_CHECKID
+        );
 
-        // 1. 检查目标表记录数
-        StringBuilder countSQL = new StringBuilder();
-        countSQL.append("SELECT \n");
-        countSQL.append("    COUNT(*) as area_range_count,\n");
-        countSQL.append("    SUM(house_count) as total_houses,\n");
-        countSQL.append("    AVG(avg_price_per_sqm) as overall_avg_price,\n");
-        countSQL.append("    MIN(avg_price_per_sqm) as min_avg_price,\n");
-        countSQL.append("    MAX(avg_price_per_sqm) as max_avg_price,\n");
-        countSQL.append("    STDDEV(avg_price_per_sqm) as price_stddev_avg\n");
-        countSQL.append("FROM ").append(DATABASE).append(".").append(TARGET_TABLE);
-        countSQL.append(" WHERE pt_date='").append(PARTITION_VALUE).append("'");
+        System.out.println("🔄 正在从 Hive 读取数据用于同步到 MySQL...");
+        System.out.println("Executing: " + selectSql);
 
-        try (PreparedStatement stmt = conn.prepareStatement(countSQL.toString());
-             ResultSet rs = stmt.executeQuery()) {
+        List<Object[]> rows = new ArrayList<>();
+        try (PreparedStatement hiveStmt = hiveConn.prepareStatement(selectSql);
+             ResultSet rs = hiveStmt.executeQuery()) {
 
-            if (rs.next()) {
-                int rangeCount = rs.getInt("area_range_count");
-                System.out.println("面积区间数量: " + rangeCount);
-                System.out.println("总房屋数量: " + formatNumber(rs.getLong("total_houses")));
-                System.out.println("整体平均单价: " + formatNumber(rs.getDouble("overall_avg_price")) + "元/㎡");
-                System.out.println("最低区间平均价: " + formatNumber(rs.getInt("min_avg_price")) + "元/㎡");
-                System.out.println("最高区间平均价: " + formatNumber(rs.getInt("max_avg_price")) + "元/㎡");
-                System.out.println("区间平均价标准差: " + formatNumber(rs.getDouble("price_stddev_avg")) + "元/㎡");
+            while (rs.next()) {
+                Object[] row = {
+                        rs.getString("area_range"),
+                        rs.getInt("house_count"),
+                        rs.getObject("avg_price_per_sqm"), // 可能为 null
+                        rs.getObject("min_price"),
+                        rs.getObject("max_price"),
+                        rs.getObject("median_price"),
+                        rs.getObject("price_variance"),
+                        rs.getObject("price_stddev"),
+                        rs.getObject("avg_house_age"),
+                        rs.getString("load_date"),
+                        rs.getString("price_level"),
+                        rs.getBigDecimal("area_ratio"),
+                        rs.getInt("checkid"),
+                        rs.getString("pt_date")
+                };
+                rows.add(row);
+            }
+        }
 
-                if (rangeCount == 0) {
-                    System.out.println("警告：没有插入任何数据！");
-                    return;
+        if (rows.isEmpty()) {
+            System.out.println("⚠️ Hive 中未找到待同步数据（pt_date='" + PARTITION_VALUE + "', checkid=" + ANALYSIS_CHECKID + "）");
+            return;
+        }
+
+        System.out.println("📥 准备将 " + rows.size() + " 条记录写入 MySQL...");
+
+        String insertSql = "INSERT INTO area_price_analysis (" +
+                "area_range, house_count, avg_price_per_sqm, min_price, max_price, " +
+                "median_price, price_variance, price_stddev, avg_house_age, load_date, " +
+                "price_level, area_ratio, checkid, pt_date) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        try (PreparedStatement mysqlStmt = mysqlConn.prepareStatement(insertSql)) {
+            for (Object[] row : rows) {
+                for (int i = 0; i < row.length; i++) {
+                    mysqlStmt.setObject(i + 1, row[i]);
                 }
+                mysqlStmt.addBatch();
             }
+            int[] results = mysqlStmt.executeBatch();
+            System.out.println("✅ 成功写入 MySQL " + results.length + " 条记录");
         }
-
-        // 2. 查看详细的面积区间分析结果
-        System.out.println("\n面积区间房价分析详细结果:");
-        printLine(120);
-
-        StringBuilder sampleSQL = new StringBuilder();
-        sampleSQL.append("SELECT \n");
-        sampleSQL.append("    area_range,\n");
-        sampleSQL.append("    house_count,\n");
-        sampleSQL.append("    avg_price_per_sqm,\n");
-        sampleSQL.append("    min_price,\n");
-        sampleSQL.append("    max_price,\n");
-        sampleSQL.append("    median_price,\n");
-        sampleSQL.append("    price_stddev,\n");
-        sampleSQL.append("    avg_house_age,\n");
-        sampleSQL.append("    ROUND(house_count * 100.0 / SUM(house_count) OVER (), 1) as percentage,\n");
-        sampleSQL.append("    (max_price - min_price) as price_range\n");
-        sampleSQL.append("FROM ").append(DATABASE).append(".").append(TARGET_TABLE).append(" \n");
-        sampleSQL.append("WHERE pt_date='").append(PARTITION_VALUE).append("'\n");
-        sampleSQL.append("ORDER BY \n");
-        sampleSQL.append("    CASE area_range\n");
-        sampleSQL.append("        WHEN '50㎡以下' THEN 1\n");
-        sampleSQL.append("        WHEN '50-90㎡' THEN 2\n");
-        sampleSQL.append("        WHEN '90-144㎡' THEN 3\n");
-        sampleSQL.append("        WHEN '144-236㎡' THEN 4\n");
-        sampleSQL.append("        ELSE 5\n");
-        sampleSQL.append("    END");
-
-        try (PreparedStatement stmt = conn.prepareStatement(sampleSQL.toString());
-             ResultSet rs = stmt.executeQuery()) {
-
-            System.out.println(String.format("%-15s %-10s %-12s %-10s %-10s %-12s %-10s %-8s %-8s %-10s",
-                    "面积区间", "房屋数量", "平均单价", "最低价", "最高价", "中位数", "标准差", "房龄", "占比%", "价格范围"));
-            printDashLine(120);
-
-            while (rs.next()) {
-                System.out.println(String.format("%-15s %-10d %-12d %-10d %-10d %-12d %-10d %-8d %-8.1f%% %-10d",
-                        rs.getString("area_range"),
-                        rs.getInt("house_count"),
-                        rs.getInt("avg_price_per_sqm"),
-                        rs.getInt("min_price"),
-                        rs.getInt("max_price"),
-                        rs.getInt("median_price"),
-                        rs.getInt("price_stddev"),
-                        rs.getInt("avg_house_age"),
-                        rs.getDouble("percentage"),
-                        rs.getInt("price_range")
-                ));
-            }
-            printLine(120);
-        }
-
-        // 3. 各面积区间的价格分布情况
-        System.out.println("\n各面积区间价格稳定性分析:");
-
-        StringBuilder distributionSQL = new StringBuilder();
-        distributionSQL.append("SELECT \n");
-        distributionSQL.append("    area_range,\n");
-        distributionSQL.append("    house_count,\n");
-        distributionSQL.append("    avg_price_per_sqm,\n");
-        distributionSQL.append("    price_stddev,\n");
-        distributionSQL.append("    ROUND(price_stddev * 100.0 / avg_price_per_sqm, 1) as stddev_ratio,\n");
-        distributionSQL.append("    CASE \n");
-        distributionSQL.append("        WHEN price_stddev < avg_price_per_sqm * 0.1 THEN '非常稳定'\n");
-        distributionSQL.append("        WHEN price_stddev < avg_price_per_sqm * 0.2 THEN '稳定'\n");
-        distributionSQL.append("        WHEN price_stddev < avg_price_per_sqm * 0.3 THEN '一般'\n");
-        distributionSQL.append("        ELSE '波动大'\n");
-        distributionSQL.append("    END as price_stability\n");
-        distributionSQL.append("FROM ").append(DATABASE).append(".").append(TARGET_TABLE).append("\n");
-        distributionSQL.append("WHERE pt_date='").append(PARTITION_VALUE).append("'\n");
-        distributionSQL.append("ORDER BY \n");
-        distributionSQL.append("    CASE area_range\n");
-        distributionSQL.append("        WHEN '50㎡以下' THEN 1\n");
-        distributionSQL.append("        WHEN '50-90㎡' THEN 2\n");
-        distributionSQL.append("        WHEN '90-144㎡' THEN 3\n");
-        distributionSQL.append("        WHEN '144-236㎡' THEN 4\n");
-        distributionSQL.append("        ELSE 5\n");
-        distributionSQL.append("    END");
-
-        try (PreparedStatement stmt = conn.prepareStatement(distributionSQL.toString());
-             ResultSet rs = stmt.executeQuery()) {
-
-            System.out.println(String.format("%-15s %-10s %-12s %-10s %-15s %-12s",
-                    "面积区间", "房屋数量", "平均单价", "标准差", "标准差/平均(%)", "价格稳定性"));
-            printDashLine(80);
-
-            while (rs.next()) {
-                System.out.println(String.format("%-15s %-10d %-12d %-10d %-15.1f%% %-12s",
-                        rs.getString("area_range"),
-                        rs.getInt("house_count"),
-                        rs.getInt("avg_price_per_sqm"),
-                        rs.getInt("price_stddev"),
-                        rs.getDouble("stddev_ratio"),
-                        rs.getString("price_stability")
-                ));
-            }
-            printLine(80);
-        }
-    }
-
-    /**
-     * 打印分隔线
-     */
-    private static void printLine(int length) {
-        StringBuilder line = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            line.append("=");
-        }
-        System.out.println(line.toString());
-    }
-
-    /**
-     * 打印虚线分隔线
-     */
-    private static void printDashLine(int length) {
-        StringBuilder line = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            line.append("-");
-        }
-        System.out.println(line.toString());
-    }
-
-    /**
-     * 格式化数字显示（添加千位分隔符）
-     */
-    private static String formatNumber(double number) {
-        String numStr = String.format("%.0f", number);
-        StringBuilder result = new StringBuilder();
-
-        int len = numStr.length();
-        for (int i = 0; i < len; i++) {
-            if (i > 0 && (len - i) % 3 == 0) {
-                result.append(",");
-            }
-            result.append(numStr.charAt(i));
-        }
-
-        return result.toString();
-    }
-
-    /**
-     * 格式化数字显示（整数版本）
-     */
-    private static String formatNumber(int number) {
-        return formatNumber((double) number);
-    }
-
-    /**
-     * 格式化数字显示（长整数版本）
-     */
-    private static String formatNumber(long number) {
-        return formatNumber((double) number);
     }
 }
