@@ -1,0 +1,36 @@
+# HBase table creation script
+# Usage: hbase shell create_hbase_table.txt
+
+# Drop existing tables if needed
+disable 'crime_incidents'
+drop 'crime_incidents'
+
+disable 'crime_index_by_date'
+drop 'crime_index_by_date'
+
+disable 'crime_index_by_state'
+drop 'crime_index_by_state'
+
+# Create main table: crime_incidents
+# RowKey design: {salt}_{state}_{city}_{incident_id}_{timestamp}
+# Use pre-split to avoid data skew
+create 'crime_incidents', 'cf', {SPLITS => ['0_', '1_', '2_', '3_', '4_', '5_', '6_', '7_', '8_', '9_']}
+
+# Create auxiliary table: crime_index_by_date
+# RowKey design: {timestamp}_{state}_{city}_{incident_id}
+create 'crime_index_by_date', 'cf'
+
+# Create auxiliary table: crime_index_by_state
+# RowKey design: {state}_{city}_{timestamp}_{incident_id}
+create 'crime_index_by_state', 'cf'
+
+# Verify table creation
+list
+
+# Show table structure
+describe 'crime_incidents'
+describe 'crime_index_by_date'
+describe 'crime_index_by_state'
+
+# Exit HBase Shell
+exit

@@ -1,0 +1,99 @@
+# HBase data insertion script
+# Usage: hbase shell insert_hbase_data.txt
+
+# Insert test data into main table: crime_incidents
+# RowKey format: {salt}_{state}_{city}_{incident_id}_{timestamp}
+# salt = hash(state) % 10
+
+# Record 1: CA, Los Angeles
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:incident_id', '20231227001'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:incident_type', 'violent_crime'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:state', 'CA'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:city', 'Los Angeles'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:zip_code', '90001'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:victims', '2'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:timestamp', '2023-12-27 14:30:00'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:latitude', '34.0522'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:longitude', '-118.2437'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:description', 'robbery'
+put 'crime_incidents', '3_CA_Los Angeles_20231227001_20231227143000', 'cf:status', 'investigating'
+
+# Record 2: NY, New York
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:incident_id', '20231227002'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:incident_type', 'property_crime'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:state', 'NY'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:city', 'New York'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:zip_code', '10001'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:victims', '1'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:timestamp', '2023-12-27 14:35:00'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:latitude', '40.7128'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:longitude', '-74.0060'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:description', 'burglary'
+put 'crime_incidents', '7_NY_New York_20231227002_20231227143500', 'cf:status', 'closed'
+
+# Record 3: TX, Houston
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:incident_id', '20231227003'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:incident_type', 'violent_crime'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:state', 'TX'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:city', 'Houston'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:zip_code', '77001'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:victims', '3'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:timestamp', '2023-12-27 14:40:00'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:latitude', '29.7604'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:longitude', '-95.3698'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:description', 'assault'
+put 'crime_incidents', '2_TX_Houston_20231227003_20231227144000', 'cf:status', 'investigating'
+
+# Record 4: CA, San Francisco
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:incident_id', '20231227004'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:incident_type', 'property_crime'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:state', 'CA'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:city', 'San Francisco'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:zip_code', '94102'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:victims', '1'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:timestamp', '2023-12-27 14:45:00'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:latitude', '37.7749'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:longitude', '-122.4194'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:description', 'vehicle_theft'
+put 'crime_incidents', '3_CA_San Francisco_20231227004_20231227144500', 'cf:status', 'closed'
+
+# Record 5: FL, Miami
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:incident_id', '20231227005'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:incident_type', 'violent_crime'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:state', 'FL'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:city', 'Miami'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:zip_code', '33101'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:victims', '2'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:timestamp', '2023-12-27 14:50:00'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:latitude', '25.7617'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:longitude', '-80.1918'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:description', 'robbery'
+put 'crime_incidents', '5_FL_Miami_20231227005_20231227145000', 'cf:status', 'investigating'
+
+# Insert data into auxiliary table: crime_index_by_date
+# RowKey format: {timestamp}_{state}_{city}_{incident_id}
+put 'crime_index_by_date', '20231227143000_CA_Los Angeles_20231227001', 'cf:incident_id', '20231227001'
+put 'crime_index_by_date', '20231227143500_NY_New York_20231227002', 'cf:incident_id', '20231227002'
+put 'crime_index_by_date', '20231227144000_TX_Houston_20231227003', 'cf:incident_id', '20231227003'
+put 'crime_index_by_date', '20231227144500_CA_San Francisco_20231227004', 'cf:incident_id', '20231227004'
+put 'crime_index_by_date', '20231227145000_FL_Miami_20231227005', 'cf:incident_id', '20231227005'
+
+# Insert data into auxiliary table: crime_index_by_state
+# RowKey format: {state}_{city}_{timestamp}_{incident_id}
+put 'crime_index_by_state', 'CA_Los Angeles_20231227143000_20231227001', 'cf:incident_id', '20231227001'
+put 'crime_index_by_state', 'NY_New York_20231227143500_20231227002', 'cf:incident_id', '20231227002'
+put 'crime_index_by_state', 'TX_Houston_20231227144000_20231227003', 'cf:incident_id', '20231227003'
+put 'crime_index_by_state', 'CA_San Francisco_20231227144500_20231227004', 'cf:incident_id', '20231227004'
+put 'crime_index_by_state', 'FL_Miami_20231227145000_20231227005', 'cf:incident_id', '20231227005'
+
+# Verify main table data
+scan 'crime_incidents', {LIMIT => 5}
+
+# Verify auxiliary table crime_index_by_date data
+scan 'crime_index_by_date', {LIMIT => 5}
+
+# Verify auxiliary table crime_index_by_state data
+scan 'crime_index_by_state', {LIMIT => 5}
+
+# Exit HBase Shell
+exit

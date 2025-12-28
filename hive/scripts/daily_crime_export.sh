@@ -24,11 +24,10 @@ echo "=== 开始执行每日高风险犯罪数据导出 ($date) ==="
 # 1. 执行Hive查询，将结果导出为CSV
 # 关键修改: 使用 -f 选项来执行包含 ADD JAR 的脚本
 echo "1. 执行Hive查询..."
-hive -f "$hive_script" > "$export_csv" 2>&1
+hive -f "$hive_script" 2>/dev/null > "$export_csv"
 
 if [ $? -ne 0 ]; then
     echo "错误：Hive查询执行失败！"
-    cat "$export_csv"
     exit 1
 fi
 
@@ -42,16 +41,36 @@ echo "DELETE FROM $mysql_table WHERE export_date = '$date';" >> "$sql_file"
 
 # 生成INSERT语句 (字段顺序必须与新SQL的SELECT顺序完全一致!)
 while IFS=$'\t' read -r city state zip_code high_risk_count avg_victims latest_incident center_lat center_lon total_incidents high_risk_percentage; do
-    # 跳过空行
+    # 跳过空行和标题行
     [ -z "$city" ] && continue
+    [ "$city" = "city" ] && continue
     
     # 处理NULL值和引号
-    city=$(echo "$city" | sed "s/'/''/g")
-    state=$(echo "$state" | sed "s/'/''/g")
-    zip_code=$(echo "$zip_code" | sed "s/'/''/g")
+    city=$(echo "$city" | sed "s/'/''/g" | sed 's/\\N//g')
+    state=$(echo "$state" | sed "s/'/''/g" | sed 's/\\N//g')
+    zip_code=$(echo "$zip_code" | sed "s/'/''/g" | sed 's/\\N//g')
+    
+    # 处理数值字段的NULL值
+    [ -z "$high_risk_count" ] || [ "$high_risk_count" = "NULL" ] && high_risk_count=0
+    [ -z "$avg_victims" ] || [ "$avg_victims" = "NULL" ] && avg_victims=0
+    [ -z "$latest_incident" ] || [ "$latest_incident" = "NULL" ] && latest_incident="NULL"
+    [ -z "$center_lat" ] || [ "$center_lat" = "NULL" ] && center_lat=0
+    [ -z "$center_lon" ] || [ "$center_lon" = "NULL" ] && center_lon=0
+    [ -z "$total_incidents" ] || [ "$total_incidents" = "NULL" ] && total_incidents=0
+    [ -z "$high_risk_percentage" ] || [ "$high_risk_percentage" = "NULL" ] && high_risk_percentage=0
+    
+    # 处理字符串字段的空值
+    [ -z "$city" ] && city="NULL"
+    [ -z "$state" ] && state="NULL"
+    [ -z "$zip_code" ] && zip_code="NULL"
     
     # 构建INSERT语句
-    echo "INSERT INTO $mysql_table (city, state, zip_code, high_risk_count, avg_victims, latest_incident, center_lat, center_lon, total_incidents, high_risk_percentage, export_date) VALUES ('$city', '$state', '$zip_code', $high_risk_count, $avg_victims, '$latest_incident', $center_lat, $center_lon, $total_incidents, $high_risk_percentage, '$date');" >> "$sql_file"
+    if [ "$latest_incident" = "NULL" ]; then
+        echo "INSERT INTO $mysql_table (city, state, zip_code, high_risk_count, avg_victims, latest_incident, center_lat, center_lon, total_incidents, high_risk_percentage, export_date) VALUES ('$city', '$state', '$zip_code', $high_risk_count, $avg_victims, NULL, $center_lat, $center_lon, $total_incidents, $high_risk_percentage, '$date');" >> "$sql_file"
+    else
+        latest_incident=$(echo "$latest_incident" | sed "s/'/''/g")
+        echo "INSERT INTO $mysql_table (city, state, zip_code, high_risk_count, avg_victims, latest_incident, center_lat, center_lon, total_incidents, high_risk_percentage, export_date) VALUES ('$city', '$state', '$zip_code', $high_risk_count, $avg_victims, '$latest_incident', $center_lat, $center_lon, $total_incidents, $high_risk_percentage, '$date');" >> "$sql_file"
+    fi
 done < "$export_csv"
 
 # 执行SQL导入

@@ -4,7 +4,7 @@ echo "=== 开始执行时间模式分析数据导出 ($date) ==="
 
 date=$(date +"%Y-%m-%d")
 tmp_dir="/tmp/time_pattern_export_$date"
-hive_script="/home/master/Data-analysis/hive/queries/daily_time_pattern_analysis.sql"
+hive_script="/home/master/Data-analysis/hive/daily_time_pattern_analysis.sql"
 export_csv="$tmp_dir/time_pattern_analysis.csv"
 
 mysql_host="localhost"
@@ -27,6 +27,7 @@ fi
 
 echo "2. 处理CSV数据..."
 sed -i '1d' "$export_csv"
+sed -i 's/\t/,/g' "$export_csv"
 sed -i 's/NULL//g' "$export_csv"
 
 echo "3. 生成MySQL导入SQL..."
@@ -34,7 +35,7 @@ import_sql="$tmp_dir/import.sql"
 echo "USE $mysql_db;" > "$import_sql"
 echo "DELETE FROM $mysql_table WHERE export_date = '$date';" >> "$import_sql"
 
-while IFS=$'\t' read -r hour_of_day hourly_crimes hourly_victims avg_victims_per_hour states_affected hour_crime_rank hour_victim_rank peak_day_name peak_day_crimes peak_quarter peak_quarter_crimes time_period crime_intensity; do
+while IFS=',' read -r hour_of_day hourly_crimes hourly_victims avg_victims_per_hour states_affected hour_crime_rank hour_victim_rank peak_day_name peak_day_crimes peak_quarter peak_quarter_crimes time_period crime_intensity; do
     hour_of_day=$(echo "$hour_of_day" | tr -d '\r' | xargs)
     hourly_crimes=$(echo "$hourly_crimes" | tr -d '\r' | xargs)
     hourly_victims=$(echo "$hourly_victims" | tr -d '\r' | xargs)

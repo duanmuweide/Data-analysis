@@ -50,26 +50,32 @@ top_city_per_state AS (
         ROW_NUMBER() OVER (PARTITION BY state ORDER BY city_crimes DESC) AS rn
     FROM city_level
 ),
-max_city_crimes AS (
-    SELECT MAX(city_crimes) AS max_crimes FROM city_level
-),
 overall_top_city_agg AS (
     SELECT 
-        MAX(city) AS overall_top_city,
-        MAX(city_crimes) AS overall_top_city_crimes
-    FROM city_level
-    WHERE city_crimes = (SELECT max_crimes FROM max_city_crimes)
+        city AS overall_top_city,
+        city_crimes AS overall_top_city_crimes
+    FROM (
+        SELECT 
+            city,
+            city_crimes,
+            RANK() OVER (ORDER BY city_crimes DESC) AS rnk
+        FROM city_level
+    ) t
+    WHERE rnk = 1
     LIMIT 1
-),
-max_state_crimes AS (
-    SELECT MAX(state_crimes) AS max_crimes FROM state_level
 ),
 highest_crime_state_agg AS (
     SELECT 
-        MAX(state) AS highest_crime_state,
-        MAX(state_crimes) AS highest_state_crimes
-    FROM state_level
-    WHERE state_crimes = (SELECT max_crimes FROM max_state_crimes)
+        state AS highest_crime_state,
+        state_crimes AS highest_state_crimes
+    FROM (
+        SELECT 
+            state,
+            state_crimes,
+            RANK() OVER (ORDER BY state_crimes DESC) AS rnk
+        FROM state_level
+    ) t
+    WHERE rnk = 1
     LIMIT 1
 ),
 state_avg_crimes AS (
