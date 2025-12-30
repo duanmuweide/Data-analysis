@@ -19,7 +19,7 @@ public class HiveToHBaseHouseDataMigration {
     private static final String HIVE_JDBC_URL = "jdbc:hive2://hadoop101:10000/cjz";
     private static final String HIVE_USER = "";
     private static final String HIVE_PASSWORD = "";
-    private static final String ZOOKEEPER_QUORUM = "hadoop101";
+    private static final String ZOOKEEPER_QUORUM = "hadoop101:2181,hadoop102:2181,hadoop103:2181";
 
     // HBase表和列族配置（更新为新表名）
     private static final String NAMESPACE = "cjz";

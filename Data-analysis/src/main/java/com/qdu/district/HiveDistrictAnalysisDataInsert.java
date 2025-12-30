@@ -19,7 +19,7 @@ public class HiveDistrictAnalysisDataInsert {
 
     // === MySQL 配置 ===
     private static final String MYSQL_JDBC_URL =
-            "jdbc:mysql://localhost:3306/cjz?" +
+            "jdbc:mysql://192.168.211.1:3306/cjz?" +
                     "useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
     private static final String MYSQL_USER = "root";       // 👈 替换为实际用户名
     private static final String MYSQL_PASSWORD = "root"; // 👈 替换为实际密码
@@ -30,10 +30,10 @@ public class HiveDistrictAnalysisDataInsert {
     private static final String DATABASE = "cjz";
 
     // 分析参数
-    private static final int CHECK_ID = 3;
+    private static int CHECK_ID; // ←←← 修改：移除 final 和初始值
     private static final String PARTITION_VALUE;
     static {
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
         PARTITION_VALUE = sdf.format(new Date());
     }
 
@@ -41,6 +41,19 @@ public class HiveDistrictAnalysisDataInsert {
     private static final String UDF_JAR_PATH = "hdfs:///user/master/dataanalysis/DataAnalysis-1.0-SNAPSHOT.jar";
 
     public static void main(String[] args) {
+        // === 新增：从命令行读取 checkid（严格参照 HouseYearAnalysisFinal.java）===
+        if (args.length < 1) {
+            System.err.println("❌ 错误: 请提供 checkid 参数（例如：java ... com.qdu.district.HiveDistrictAnalysisDataInsert 123）");
+            System.exit(1);
+        }
+        try {
+            CHECK_ID = Integer.parseInt(args[0]);
+        } catch (NumberFormatException e) {
+            System.err.println("❌ 错误: checkid 必须是一个整数，但收到的是: " + args[0]);
+            System.exit(1);
+        }
+        // =====================================
+
         System.setProperty("HADOOP_USER_NAME", "master");
         System.out.println("===== 参数配置 =====");
         System.out.println("HADOOP_USER_NAME: " + System.getProperty("HADOOP_USER_NAME"));
@@ -56,6 +69,13 @@ public class HiveDistrictAnalysisDataInsert {
             Class.forName("org.apache.hive.jdbc.HiveDriver");
             hiveConn = DriverManager.getConnection(HIVE_JDBC_URL, HIVE_USER, HIVE_PASSWORD);
             System.out.println("✓ Hive连接成功");
+
+            // >>>>>>>>>>>>>>>>>> 新增：设置 MapReduce 内存参数 <<<<<<<<<<<<<<<<<<
+            try (PreparedStatement s1 = hiveConn.prepareStatement("SET mapreduce.map.memory.mb=4096")) { s1.execute(); }
+            try (PreparedStatement s2 = hiveConn.prepareStatement("SET mapreduce.reduce.memory.mb=4096")) { s2.execute(); }
+            try (PreparedStatement s3 = hiveConn.prepareStatement("SET mapreduce.map.java.opts=-Xmx3276m")) { s3.execute(); }
+            try (PreparedStatement s4 = hiveConn.prepareStatement("SET mapreduce.reduce.java.opts=-Xmx3276m")) { s4.execute(); }
+            System.out.println("✓ 已设置 MapReduce 内存参数");
 
             // 注册自定义 UDF（仅房龄）
             registerHouseAgeUDF(hiveConn);

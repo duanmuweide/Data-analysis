@@ -18,11 +18,11 @@ public class AnalyzeAndInsertCommunityPrice {
 
     private static final String SOURCE_TABLE_NAME = "cjz:house_info_clean_checkid";
     private static final String TARGET_HBASE_TABLE_NAME = "cjz:community_price_analysis";
-    private static final int TARGET_CHECKID = 3;
+    private static int TARGET_CHECKID; // ←←← 修改：移除 final 和初始值
 
     // MySQL 配置
     private static final String MYSQL_JDBC_URL =
-            "jdbc:mysql://localhost:3306/cjz?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
+            "jdbc:mysql://192.168.211.1:3306/cjz?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
     private static final String MYSQL_USER = "root";
     private static final String MYSQL_PASSWORD = "root";
 
@@ -32,6 +32,19 @@ public class AnalyzeAndInsertCommunityPrice {
     private static Table targetTable = null;
 
     public static void main(String[] args) {
+        // === 新增：从命令行读取 checkid（严格参照 HouseYearAnalysisFinal.java）===
+        if (args.length < 1) {
+            System.err.println("❌ 错误: 请提供 checkid 参数（例如：java ... com.qdu.hbase.AnalyzeAndInsertCommunityPrice 123）");
+            System.exit(1);
+        }
+        try {
+            TARGET_CHECKID = Integer.parseInt(args[0]);
+        } catch (NumberFormatException e) {
+            System.err.println("❌ 错误: checkid 必须是一个整数，但收到的是: " + args[0]);
+            System.exit(1);
+        }
+        // =====================================
+
         System.out.println("===== 小区房价分析程序启动 =====");
         System.out.println("源表: " + SOURCE_TABLE_NAME);
         System.out.println("目标HBase表: " + TARGET_HBASE_TABLE_NAME);
@@ -52,7 +65,7 @@ public class AnalyzeAndInsertCommunityPrice {
 
     private static void initHBase() throws IOException {
         Configuration conf = HBaseConfiguration.create();
-        conf.set("hbase.zookeeper.quorum", "hadoop101");
+        conf.set("hbase.zookeeper.quorum", "hadoop101:2181,hadoop102:2181,hadoop103:2181");
         conf.set("hbase.zookeeper.property.clientPort", "2181");
 
         hbaseConnection = ConnectionFactory.createConnection(conf);

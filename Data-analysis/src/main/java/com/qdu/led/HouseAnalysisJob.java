@@ -12,15 +12,28 @@ public class HouseAnalysisJob {
 
     // === 新增：MySQL 配置 ===
     private static final String MYSQL_JDBC_URL =
-            "jdbc:mysql://localhost:3306/cjz?" +
+            "jdbc:mysql://192.168.211.1:3306/cjz?" +
                     "useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
     private static final String MYSQL_USER = "root";       // 👈 替换为实际用户名
     private static final String MYSQL_PASSWORD = "root"; // 👈 替换为实际密码
 
-    // 将 checkid 提取为变量（只需修改这一行）
-    private static final int CHECK_ID = 3;
+    // 改为从命令行接收 checkid
+    private static int CHECK_ID;
 
     public static void main(String[] args) {
+        // === 从命令行读取 checkid（参考 HouseYearAnalysisFinal.java）===
+        if (args.length < 1) {
+            System.err.println("❌ 错误: 请提供 checkid 参数（例如：java ... com.qdu.led.HouseAnalysisJob 123）");
+            System.exit(1);
+        }
+        try {
+            CHECK_ID = Integer.parseInt(args[0]);
+        } catch (NumberFormatException e) {
+            System.err.println("❌ 错误: checkid 必须是一个整数，但收到的是: " + args[0]);
+            System.exit(1);
+        }
+        // =====================================
+
         System.out.println("开始执行房屋数据分析任务（checkid=" + CHECK_ID + "）...");
         Connection hiveConn = null;
         Connection mysqlConn = null;
@@ -31,6 +44,13 @@ public class HouseAnalysisJob {
             Class.forName("org.apache.hive.jdbc.HiveDriver");
             hiveConn = DriverManager.getConnection(HIVE_JDBC_URL, HIVE_USER, HIVE_PASSWORD);
             stmt = hiveConn.createStatement();
+
+            // >>>>>>>>>>>>>>>>>> 新增：设置 MapReduce 内存参数 <<<<<<<<<<<<<<<<<<
+            stmt.execute("SET mapreduce.map.memory.mb=4096");
+            stmt.execute("SET mapreduce.reduce.memory.mb=4096");
+            stmt.execute("SET mapreduce.map.java.opts=-Xmx3276m");
+            stmt.execute("SET mapreduce.reduce.java.opts=-Xmx3276m");
+            System.out.println("✓ 已设置 MapReduce 内存参数");
 
             // 注册临时函数
             stmt.execute("ADD JAR hdfs:///user/master/dataanalysis/DataAnalysis-1.0-SNAPSHOT.jar");

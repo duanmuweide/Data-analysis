@@ -1,5 +1,7 @@
 package com.qdu.area;
 
+import groovy.transform.builder.InitializerStrategy;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -13,6 +15,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+import static jdk.nashorn.internal.runtime.PropertyDescriptor.SET;
+
 public class AreaPriceAnalysisDataInsert {
 
     // === Hive 配置 ===
@@ -22,14 +26,14 @@ public class AreaPriceAnalysisDataInsert {
 
     // === MySQL 配置 ===
     private static final String MYSQL_JDBC_URL =
-            "jdbc:mysql://localhost:3306/cjz?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
-    private static final String MYSQL_USER = "root";       // 👈 请替换为实际用户名
-    private static final String MYSQL_PASSWORD = "root"; // 👈 请替换为实际密码
+            "jdbc:mysql://192.168.211.1:3306/cjz?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
+    private static final String MYSQL_USER = "root";       //
+    private static final String MYSQL_PASSWORD = "root"; //
 
     private static final String SOURCE_TABLE = "house_info_clean_checkid";
     private static final String TARGET_TABLE = "area_price_analysis";
     private static final String DATABASE = "cjz";
-    private static final int ANALYSIS_CHECKID = 3;
+    private static final int ANALYSIS_CHECKID = 1;
 
     private static final String PARTITION_VALUE;
     static {
@@ -103,7 +107,14 @@ public class AreaPriceAnalysisDataInsert {
                 "SET hive.exec.dynamic.partition.mode = nonstrict",
                 "SET hive.vectorized.execution.enabled = true",
                 "SET hive.cbo.enable = true",
-                "SET hive.fetch.task.conversion = more"
+                "SET hive.fetch.task.conversion = more",
+
+                // === 新增内存配置 ===
+                "SET mapreduce.map.memory.mb=4096",
+                "SET mapreduce.reduce.memory.mb=4096",
+                "SET mapreduce.map.java.opts=-Xmx3276m",
+                "SET mapreduce.reduce.java.opts=-Xmx3276m"
+
         };
         for (String param : params) {
             try (PreparedStatement stmt = conn.prepareStatement(param)) {

@@ -23,7 +23,7 @@ public class HouseYearAnalysisFinal {
 
     // === 新增：MySQL 配置 ===
     private static final String MYSQL_JDBC_URL =
-            "jdbc:mysql://localhost:3306/cjz?" +
+            "jdbc:mysql://192.168.211.1:3306/cjz?" +
                     "useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
     private static final String MYSQL_USER = "root";       // 👈 替换为实际用户名
     private static final String MYSQL_PASSWORD = "root"; // 👈 替换为实际密码
@@ -33,8 +33,8 @@ public class HouseYearAnalysisFinal {
     private static final String TARGET_TABLE = "house_year_analysis";
     private static final String DATABASE = "cjz";
 
-    // ============ 配置参数：只需修改这里 ============
-    private static final int ANALYSIS_CHECK_ID = 3;
+    // ============ 配置参数：改为从命令行接收 ============
+    private static int ANALYSIS_CHECK_ID; // 移除 final 和初始值
     // =============================================
 
     // 分区日期（格式：yyyyMMdd，如 20251225）
@@ -45,6 +45,19 @@ public class HouseYearAnalysisFinal {
     }
 
     public static void main(String[] args) {
+        // === 新增：从命令行读取 checkid ===
+        if (args.length < 1) {
+            System.err.println("❌ 错误: 请提供 checkid 参数（例如：java ... com.qdu.year.HouseYearAnalysisFinal 123）");
+            System.exit(1);
+        }
+        try {
+            ANALYSIS_CHECK_ID = Integer.parseInt(args[0]);
+        } catch (NumberFormatException e) {
+            System.err.println("❌ 错误: checkid 必须是一个整数，但收到的是: " + args[0]);
+            System.exit(1);
+        }
+        // =====================================
+
         // 设置Hadoop用户身份
         System.setProperty("HADOOP_USER_NAME", "master");
 

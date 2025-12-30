@@ -23,18 +23,32 @@ public class BestValueHousingJob {
 
     // === 新增：MySQL 配置 ===
     private static final String MYSQL_JDBC_URL =
-            "jdbc:mysql://localhost:3306/cjz?" +
+            "jdbc:mysql://192.168.211.1:3306/cjz?" +
                     "useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai";
     private static final String MYSQL_USER = "root";       // 👈 替换为实际用户名
     private static final String MYSQL_PASSWORD = "root"; // 👈 替换为实际密码
 
-    private static final int CHECK_ID = 3;
+    // 改为从命令行参数接收 checkid
+    private static int CHECK_ID;
+
     private static final String UDF_JAR_PATH = "hdfs:///user/master/dataanalysis/DataAnalysis-1.0-SNAPSHOT.jar";
 
     // 获取当前日期字符串（格式：yyyy-MM-dd），与 Hive 的 CURRENT_DATE() 一致
     private static final String PT_DATE = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
 
     public static void main(String[] args) {
+        // 从命令行接收 checkid
+        if (args.length < 1) {
+            System.err.println("❌ 错误: 请提供 checkid 参数（例如：java ... com.qdu.value.BestValueHousingJob 123）");
+            System.exit(1);
+        }
+        try {
+            CHECK_ID = Integer.parseInt(args[0]);
+        } catch (NumberFormatException e) {
+            System.err.println("❌ 错误: checkid 必须是一个整数，但收到的是: " + args[0]);
+            System.exit(1);
+        }
+
         System.out.println("🚀 开始执行性价比房屋分析任务（checkid=" + CHECK_ID + ", pt_date=" + PT_DATE + "）...");
 
         Connection hiveConn = null;
