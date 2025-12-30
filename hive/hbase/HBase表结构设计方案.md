@@ -129,56 +129,7 @@ N = Region数量（如：10）
 - 查询时需要遍历所有可能的salt值
 - 增加查询复杂度
 
-#### 方案2：哈希前缀
 
-**原理**：对RowKey进行哈希运算，使用哈希值作为前缀
-
-**实现**：
-```
-RowKey = {hash_prefix}_{state}_{city}_{incident_id}_{timestamp}
-
-其中hash_prefix = MD5(state + city).substring(0, 4)
-```
-
-**示例**：
-```
-a1b2_CA_Los Angeles_20231227001_20231227143000
-c3d4_NY_New York_20231227002_20231227143500
-e5f6_TX_Houston_20231227003_20231227144000
-```
-
-**优点**：
-- 数据分布均匀
-- 查询时可计算哈希前缀
-
-**缺点**：
-- 失去RowKey的字典序特性
-- 范围查询性能下降
-
-#### 方案3：反转RowKey
-
-**原理**：将时间戳或ID等容易产生热点的字段反转
-
-**实现**：
-```
-RowKey = {state}_{city}_{timestamp_reverse}_{incident_id}
-
-其中timestamp_reverse = reverse(timestamp)
-```
-
-**示例**：
-```
-CA_Los Angeles_00034121723202_20231227001
-NY_New York_00053121723202_20231227002
-TX_Houston_00044121723202_20231227003
-```
-
-**优点**：
-- 避免时间序列数据的热点问题
-- 保持部分字典序特性
-
-**缺点**：
-- 时间范围查询需要特殊处理
 
 ### 4.3 推荐方案
 

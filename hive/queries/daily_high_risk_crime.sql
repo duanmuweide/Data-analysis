@@ -20,7 +20,7 @@ WITH latest_version AS (
 high_risk_filtered AS (
     SELECT 
         UPPER(city) AS city_upper,
-        city, -- 保留原始 city 用于后续关联
+        city,
         state,
         zip_code,
         victims,
@@ -30,7 +30,7 @@ high_risk_filtered AS (
     FROM crime_incidents, latest_version
     WHERE 
         versionid = max_vid
-        AND year >= 2020          -- 从Q1继承的关键过滤
+        AND year >= 2020
         AND city IS NOT NULL
         AND victims IS NOT NULL
         AND risk_level(victims) = 'High' -- 使用UDF

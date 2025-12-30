@@ -5,3 +5,6 @@
 /data/raw/crime.csv
 /data/raw/crime_example.csv
 /data/cleaned/crime_cleaned.csv
+/data/*.csv
+/data/versions/*.csv
+

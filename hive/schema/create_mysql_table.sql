@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS crime_analysis.daily_high_risk_crimes (
     high_risk_percentage DECIMAL(5,2),
     export_date DATE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
 
 -- 创建索引优化查询
 CREATE INDEX idx_city ON daily_high_risk_crimes(city);
