@@ -1,0 +1,26 @@
+# ===== 编译产物 =====
+target/
+out/
+*.class
+*.jar
+*.war
+
+# ===== IDE =====
+.idea/
+*.iml
+
+# ===== 数据文件 =====
+/data/cleaned/versions/crime_version3.csv
+/data/cleaned/versions/crime_version1.csv
+/data/cleaned/crime_with_versionid.csv
+/data/cleaned/versions/crime_version2.csv
+/data/raw/crime.csv
+/data/raw/crime_example.csv
+/data/cleaned/crime_cleaned.csv
+/data/*.csv
+/data/versions/*.csv
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+

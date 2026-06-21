@@ -1,0 +1,102 @@
+#!/bin/bash
+# upload_file.sh - 修复ID解析问题
+
+# 配置
+HIVE_DB="data_analysis"
+HIVE_TABLE="watershed_nutrient_balance"
+TMP_TABLE="data_tmp"
+HIVE_USER="master"
+HIVE_HOST="master-pc"
+HIVE_PORT="10000"
+DATA_BASE_PATH="/home/master"
+
+# 参数检查
+if [ $# -ne 1 ]; then
+    echo "用法: $0 <文件名>"
+    exit 1
+fi
+
+FILE_NAME=$1
+FILE_PATH="${DATA_BASE_PATH}/${FILE_NAME}"
+
+if [ ! -f "${FILE_PATH}" ]; then
+    echo "文件不存在: ${FILE_PATH}"
+    exit 1
+fi
+
+echo "开始上传: ${FILE_NAME}"
+
+# 1. 清空临时表
+echo "清空临时表..."
+beeline -u "jdbc:hive2://${HIVE_HOST}:${HIVE_PORT}/${HIVE_DB};user=${HIVE_USER}" -e "TRUNCATE TABLE ${TMP_TABLE};" 2>/dev/null
+
+# 2. 加载到临时表
+echo "加载文件到临时表..."
+beeline -u "jdbc:hive2://${HIVE_HOST}:${HIVE_PORT}/${HIVE_DB};user=${HIVE_USER}" -e "LOAD DATA LOCAL INPATH '${FILE_PATH}' INTO TABLE ${TMP_TABLE};" 2>/dev/null
+
+# 3. 可靠的ID获取方法 - 修复版
+echo "获取批次ID..."
+
+# 创建临时文件
+TEMP_FILE=$(mktemp)
+
+# 执行查询，保存完整输出
+beeline -u "jdbc:hive2://${HIVE_HOST}:${HIVE_PORT}/${HIVE_DB};user=${HIVE_USER}" -e "SELECT COALESCE(MAX(id), 0) FROM ${HIVE_TABLE};" > "$TEMP_FILE" 2>/dev/null
+
+echo "=== 原始查询结果（行号）==="
+cat -n "$TEMP_FILE"
+echo "=== 结束 ==="
+
+# 正确解析：取第4行，去掉空格和竖线
+MAX_ID=$(sed -n '4p' "$TEMP_FILE" | sed 's/[^0-9]//g')
+
+echo "提取的MAX_ID值: '$MAX_ID'"
+
+# 清理临时文件
+rm -f "$TEMP_FILE"
+
+# 检查是否为有效数字
+if [[ "$MAX_ID" =~ ^[0-9]+$ ]]; then
+    CURRENT_ID=$((MAX_ID + 1))
+    echo "最大ID: $MAX_ID, 本次ID: $CURRENT_ID"
+else
+    CURRENT_ID=1
+    echo "未能获取有效ID，使用默认ID: 1"
+fi
+
+echo "使用批次ID: $CURRENT_ID"
+
+# 4. 插入数据到主表
+echo "插入数据到主表..."
+INSERT_OUTPUT=$(beeline -u "jdbc:hive2://${HIVE_HOST}:${HIVE_PORT}/${HIVE_DB};user=${HIVE_USER}" --silent=true -e "
+SET hive.exec.dynamic.partition=true;
+SET hive.exec.dynamic.partition.mode=nonstrict;
+
+INSERT INTO TABLE ${HIVE_TABLE}
+PARTITION (id=${CURRENT_ID}, year)
+SELECT
+    FIPS,area_sqkm,n_farm_fert_kgsqkm,p_farm_fert_kgsqkm,
+    n_nonfarm_fert_kgsqkm,p_nonfarm_fert_kgsqkm,n_total_fert_kgsqkm,p_total_fert_kgsqkm,
+    n_manure_kgsqkm,p_manure_kgsqkm,n_livestock_dem_kgsqkm,p_livestock_dem_kgsqkm,
+    n_livestock_prod_kgsqkm,p_livestock_prod_kgsqkm,n_livestock_rec_kgsqkm,p_livestock_rec_kgsqkm,
+    n_crop_rem_kgsqkm,p_crop_rem_kgsqkm,n_pasture_rem_kgsqkm,p_pasture_rem_kgsqkm,
+    n_crop_fix_kgsqkm,n_human_food_dem_kgsqkm,p_human_food_dem_kgsqkm,n_human_food_waste_kgsqkm,
+    p_human_food_waste_kgsqkm,p_human_nonfood_dem_kgsqkm,p_human_nonfood_waste_kgsqkm,p_human_total_dem_kgsqkm,
+    p_human_total_waste_kgsqkm,n_point_source_kgsqkm,p_point_source_kgsqkm,n_atm_dep_kgsqkm,
+    p_atm_dep_kgsqkm,n_nat_fix_kgsqkm,n_rock_kgsqkm,n_emis_total_kgsqkm,
+    n_emis_ag_kgsqkm,n_emis_fire_kgsqkm,n_emis_lightning_kgsqkm,n_emis_nonpoint_kgsqkm,
+    n_emis_point_kgsqkm,n_emis_transport_kgsqkm,n_ag_n2o_kgsqkm,n_ag_n2_kgsqkm,
+    n_terr_surplus_kgsqkm,p_terr_surplus_kgsqkm,n_ag_surplus_kgsqkm,p_ag_surplus_kgsqkm,
+    n_leg_ag_surplus_kgsqkm,p_leg_ag_surplus_kgsqkm,n_nue_kgsqkm,p_nue_kgsqkm,
+    year
+FROM ${TMP_TABLE};
+" 2>&1)
+
+# 检查插入结果
+if echo "$INSERT_OUTPUT" | grep -qi "error\|failed\|exception"; then
+    echo "插入失败！错误信息："
+    echo "$INSERT_OUTPUT" | grep -i "error\|failed\|exception"
+    exit 1
+else
+    echo "插入成功"
+fi
